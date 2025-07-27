@@ -1,0 +1,1396 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+src/
+  auth.ts
+  client.ts
+  DurableObjectRoom.ts
+  index.ts
+  spotifyAuth.ts
+  testSync.ts
+  tokenManager.ts
+  types.ts
+  uiManager.ts
+.gitignore
+package.json
+README.md
+tsconfig.json
+wrangler.toml
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path=".gitignore">
+node_modules
+.env
+</file>
+
+<file path="README.md">
+# 🎵 Spot-along
+
+### Real-time Spotify listening parties, right in your terminal.
+
+A command-line tool that lets you create shared, synchronized music sessions with friends, inspired by Discord's "Listen Along" feature. The host controls the music using their regular Spotify app (desktop or mobile), and everyone else's player syncs up in real-time.
+
+
+---
+
+## ✨ Features
+
+*   **Real-Time Sync:** Music playback is synchronized between the host and all listeners.
+*   **Polished Terminal UI:** A clean, flicker-free interface that shows the current song, artist, and a live progress bar.
+*   **Persistent & Secure Auth:** Log in once! The app securely saves and refreshes your Spotify credentials so you don't have to log in with your browser every time.
+*   **Host & Listener Model:** One person acts as the host, and up to 9 others can join as listeners. The member list shows who's in the room and who's hosting.
+*   **Cross-Platform:** Works on Windows, macOS, and Linux.
+*   **Intuitive Controls:** Simple, single-key navigation for creating rooms and accessing settings.
+*   **Built-in Settings:** An easy-to-use help screen shows you where your configuration is stored and allows for a one-key reset.
+
+## ✅ Prerequisites
+
+Before you begin, you will need two things:
+
+1.  **Node.js:** You must have Node.js (version 16 or later) installed on your system. You can download it from [nodejs.org](https://nodejs.org/).
+2.  **Spotify Premium Account:** The Spotify Web API requires a **Premium** account to control playback remotely. This tool will not work with a free Spotify account. All users (both host and listeners) must have a Premium subscription.
+
+## 🚀 Usage
+
+The easiest way to use Spot-along is with `npx`, which will run the package without needing a permanent installation.
+
+```bash
+npx spot
+```
+
+The first time you run this, your web browser will open to the Spotify login page. After you approve the permissions, Spot-along will handle the rest. On subsequent runs, it will use your saved tokens and you won't need to log in again.
+
+### Controls
+
+Once the application is running, use these single-key commands:
+
+| Key | Action                                       | Availability      |
+|:---:|----------------------------------------------|-------------------|
+| `c` | **Create** a new listening room and become the host. | Main Menu         |
+| `j` | **Join** an existing room using a Room ID.         | Main Menu         |
+| `h` | Open the **Help & Settings** screen.           | Main Menu         |
+| `r` | **Reset** your configuration (deletes saved tokens). | Help & Settings   |
+| `b` | Go **Back** to the Main Menu.                | Help & Settings   |
+| `q` | **Quit** the application.                      | Any Screen        |
+
+---
+
+## 🛠️ Development Setup
+
+Interested in contributing or running the project from the source code? Follow these steps.
+
+### 1. Clone the Repository
+```bash
+git clone https://github.com/Sarthakischill/spot-along.git
+cd spot-along
+```
+
+### 2. Install Dependencies
+```bash
+npm install
+```
+
+### 3. Set Up Your Spotify API Credentials
+
+You need to register your own application with Spotify to get the necessary API keys.
+
+1.  Go to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and log in.
+2.  Click **"Create app"**.
+3.  Give it a name (e.g., "Spot-along Dev") and a description.
+4.  Once created, copy your **Client ID** and **Client Secret**.
+5.  Click **"Edit Settings"**.
+6.  In the "Redirect URIs" box, add this exact URL: `http://localhost:8888/callback`
+7.  Click **"Add"** and then **"Save"**.
+
+### 4. Create Your Environment File
+
+In the root of the project, create a file named `.env` and populate it with the credentials you just copied.
+
+**.env**
+```
+SPOTIFY_CLIENT_ID=your_client_id_from_the_dashboard
+SPOTIFY_CLIENT_SECRET=your_client_secret_from_the_dashboard
+REDIRECT_URI=http://localhost:8888/callback
+```
+
+### 5. Running the Application Locally
+
+The project consists of a server (the central message broker) and a client (the terminal UI). You must run both in separate terminals.
+
+*   **In your FIRST terminal, run the server:**
+    ```bash
+    npm run start:server
+    ```
+    Wait for `🚀 WebSocket server started...` to appear.
+
+*   **In your SECOND terminal, run the client:**
+    ```bash
+    npm run start:client
+    ```
+
+## 🏗️ Project Structure
+
+A brief overview of the key files in the project:
+
+*   `src/client.ts`: The main entry point for the user-facing terminal application. It handles keypresses, orchestrates API calls, and manages the main application state.
+*   `src/server.ts`: The WebSocket server that manages rooms, handles user connections, and relays messages between the host and listeners.
+*   `src/uiManager.ts`: The dedicated rendering engine. It's responsible for drawing the entire user interface without flicker, using `log-update`.
+*   `src/tokenManager.ts`: Handles all logic related to Spotify authentication—saving, loading, refreshing, and validating tokens.
+*   `src/types.ts`: Defines shared TypeScript interfaces for messages and data payloads, ensuring type safety between the client and server.
+
+---
+
+## ❤️ Author
+
+Made with ♥ by **Sarthak**
+*   **X.com / Twitter:** [x.com/Sarthakhuh](https://x.com/Sarthakhuh)
+*   **GitHub:** [@your-github-username](https://github.com/Sarthakischill)
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE)
+</file>
+
+<file path="tsconfig.json">
+{
+  "compilerOptions": {
+    /* Visit https://aka.ms/tsconfig to read more about this file */
+
+    /* Projects */
+    // "incremental": true,                              /* Save .tsbuildinfo files to allow for incremental compilation of projects. */
+    // "composite": true,                                /* Enable constraints that allow a TypeScript project to be used with project references. */
+    // "tsBuildInfoFile": "./.tsbuildinfo",              /* Specify the path to .tsbuildinfo incremental compilation file. */
+    // "disableSourceOfProjectReferenceRedirect": true,  /* Disable preferring source files instead of declaration files when referencing composite projects. */
+    // "disableSolutionSearching": true,                 /* Opt a project out of multi-project reference checking when editing. */
+    // "disableReferencedProjectLoad": true,             /* Reduce the number of projects loaded automatically by TypeScript. */
+
+    /* Language and Environment */
+    "target": "es2016",                                  /* Set the JavaScript language version for emitted JavaScript and include compatible library declarations. */
+    "lib": ["es6","dom"],                                /* Specify a set of bundled library declaration files that describe the target runtime environment. */
+    // "jsx": "preserve",                                /* Specify what JSX code is generated. */
+    // "libReplacement": true,                           /* Enable lib replacement. */
+    // "experimentalDecorators": true,                   /* Enable experimental support for legacy experimental decorators. */
+    // "emitDecoratorMetadata": true,                    /* Emit design-type metadata for decorated declarations in source files. */
+    // "jsxFactory": "",                                 /* Specify the JSX factory function used when targeting React JSX emit, e.g. 'React.createElement' or 'h'. */
+    // "jsxFragmentFactory": "",                         /* Specify the JSX Fragment reference used for fragments when targeting React JSX emit e.g. 'React.Fragment' or 'Fragment'. */
+    // "jsxImportSource": "",                            /* Specify module specifier used to import the JSX factory functions when using 'jsx: react-jsx*'. */
+    // "reactNamespace": "",                             /* Specify the object invoked for 'createElement'. This only applies when targeting 'react' JSX emit. */
+    // "noLib": true,                                    /* Disable including any library files, including the default lib.d.ts. */
+    // "useDefineForClassFields": true,                  /* Emit ECMAScript-standard-compliant class fields. */
+    // "moduleDetection": "auto",                        /* Control what method is used to detect module-format JS files. */
+
+    /* Modules */
+    "module": "commonjs",                                /* Specify what module code is generated. */
+    "rootDir": "src",                                    /* Specify the root folder within your source files. */
+    // "moduleResolution": "node10",                     /* Specify how TypeScript looks up a file from a given module specifier. */
+    // "baseUrl": "./",                                  /* Specify the base directory to resolve non-relative module names. */
+    // "paths": {},                                      /* Specify a set of entries that re-map imports to additional lookup locations. */
+    // "rootDirs": [],                                   /* Allow multiple folders to be treated as one when resolving modules. */
+    // "typeRoots": [],                                  /* Specify multiple folders that act like './node_modules/@types'. */
+    // "types": [],                                      /* Specify type package names to be included without being referenced in a source file. */
+    // "allowUmdGlobalAccess": true,                     /* Allow accessing UMD globals from modules. */
+    // "moduleSuffixes": [],                             /* List of file name suffixes to search when resolving a module. */
+    // "allowImportingTsExtensions": true,               /* Allow imports to include TypeScript file extensions. Requires '--moduleResolution bundler' and either '--noEmit' or '--emitDeclarationOnly' to be set. */
+    // "rewriteRelativeImportExtensions": true,          /* Rewrite '.ts', '.tsx', '.mts', and '.cts' file extensions in relative import paths to their JavaScript equivalent in output files. */
+    // "resolvePackageJsonExports": true,                /* Use the package.json 'exports' field when resolving package imports. */
+    // "resolvePackageJsonImports": true,                /* Use the package.json 'imports' field when resolving imports. */
+    // "customConditions": [],                           /* Conditions to set in addition to the resolver-specific defaults when resolving imports. */
+    // "noUncheckedSideEffectImports": true,             /* Check side effect imports. */
+    "resolveJsonModule": true,                           /* Enable importing .json files. */
+    // "allowArbitraryExtensions": true,                 /* Enable importing files with any extension, provided a declaration file is present. */
+    // "noResolve": true,                                /* Disallow 'import's, 'require's or '<reference>'s from expanding the number of files TypeScript should add to a project. */
+
+    /* JavaScript Support */
+    // "allowJs": true,                                  /* Allow JavaScript files to be a part of your program. Use the 'checkJS' option to get errors from these files. */
+    // "checkJs": true,                                  /* Enable error reporting in type-checked JavaScript files. */
+    // "maxNodeModuleJsDepth": 1,                        /* Specify the maximum folder depth used for checking JavaScript files from 'node_modules'. Only applicable with 'allowJs'. */
+
+    /* Emit */
+    // "declaration": true,                              /* Generate .d.ts files from TypeScript and JavaScript files in your project. */
+    // "declarationMap": true,                           /* Create sourcemaps for d.ts files. */
+    // "emitDeclarationOnly": true,                      /* Only output d.ts files and not JavaScript files. */
+    // "sourceMap": true,                                /* Create source map files for emitted JavaScript files. */
+    // "inlineSourceMap": true,                          /* Include sourcemap files inside the emitted JavaScript. */
+    // "noEmit": true,                                   /* Disable emitting files from a compilation. */
+    // "outFile": "./",                                  /* Specify a file that bundles all outputs into one JavaScript file. If 'declaration' is true, also designates a file that bundles all .d.ts output. */
+    "outDir": "dist",                                    /* Specify an output folder for all emitted files. */
+    // "removeComments": true,                           /* Disable emitting comments. */
+    // "importHelpers": true,                            /* Allow importing helper functions from tslib once per project, instead of including them per-file. */
+    // "downlevelIteration": true,                       /* Emit more compliant, but verbose and less performant JavaScript for iteration. */
+    // "sourceRoot": "",                                 /* Specify the root path for debuggers to find the reference source code. */
+    // "mapRoot": "",                                    /* Specify the location where debugger should locate map files instead of generated locations. */
+    // "inlineSources": true,                            /* Include source code in the sourcemaps inside the emitted JavaScript. */
+    // "emitBOM": true,                                  /* Emit a UTF-8 Byte Order Mark (BOM) in the beginning of output files. */
+    // "newLine": "crlf",                                /* Set the newline character for emitting files. */
+    // "stripInternal": true,                            /* Disable emitting declarations that have '@internal' in their JSDoc comments. */
+    // "noEmitHelpers": true,                            /* Disable generating custom helper functions like '__extends' in compiled output. */
+    // "noEmitOnError": true,                            /* Disable emitting files if any type checking errors are reported. */
+    // "preserveConstEnums": true,                       /* Disable erasing 'const enum' declarations in generated code. */
+    // "declarationDir": "./",                           /* Specify the output directory for generated declaration files. */
+
+    /* Interop Constraints */
+    // "isolatedModules": true,                          /* Ensure that each file can be safely transpiled without relying on other imports. */
+    // "verbatimModuleSyntax": true,                     /* Do not transform or elide any imports or exports not marked as type-only, ensuring they are written in the output file's format based on the 'module' setting. */
+    // "isolatedDeclarations": true,                     /* Require sufficient annotation on exports so other tools can trivially generate declaration files. */
+    // "erasableSyntaxOnly": true,                       /* Do not allow runtime constructs that are not part of ECMAScript. */
+    // "allowSyntheticDefaultImports": true,             /* Allow 'import x from y' when a module doesn't have a default export. */
+    "esModuleInterop": true,                             /* Emit additional JavaScript to ease support for importing CommonJS modules. This enables 'allowSyntheticDefaultImports' for type compatibility. */
+    // "preserveSymlinks": true,                         /* Disable resolving symlinks to their realpath. This correlates to the same flag in node. */
+    "forceConsistentCasingInFileNames": true,            /* Ensure that casing is correct in imports. */
+
+    /* Type Checking */
+    "strict": true,                                      /* Enable all strict type-checking options. */
+    // "noImplicitAny": true,                            /* Enable error reporting for expressions and declarations with an implied 'any' type. */
+    // "strictNullChecks": true,                         /* When type checking, take into account 'null' and 'undefined'. */
+    // "strictFunctionTypes": true,                      /* When assigning functions, check to ensure parameters and the return values are subtype-compatible. */
+    // "strictBindCallApply": true,                      /* Check that the arguments for 'bind', 'call', and 'apply' methods match the original function. */
+    // "strictPropertyInitialization": true,             /* Check for class properties that are declared but not set in the constructor. */
+    // "strictBuiltinIteratorReturn": true,              /* Built-in iterators are instantiated with a 'TReturn' type of 'undefined' instead of 'any'. */
+    // "noImplicitThis": true,                           /* Enable error reporting when 'this' is given the type 'any'. */
+    // "useUnknownInCatchVariables": true,               /* Default catch clause variables as 'unknown' instead of 'any'. */
+    // "alwaysStrict": true,                             /* Ensure 'use strict' is always emitted. */
+    // "noUnusedLocals": true,                           /* Enable error reporting when local variables aren't read. */
+    // "noUnusedParameters": true,                       /* Raise an error when a function parameter isn't read. */
+    // "exactOptionalPropertyTypes": true,               /* Interpret optional property types as written, rather than adding 'undefined'. */
+    // "noImplicitReturns": true,                        /* Enable error reporting for codepaths that do not explicitly return in a function. */
+    // "noFallthroughCasesInSwitch": true,               /* Enable error reporting for fallthrough cases in switch statements. */
+    // "noUncheckedIndexedAccess": true,                 /* Add 'undefined' to a type when accessed using an index. */
+    // "noImplicitOverride": true,                       /* Ensure overriding members in derived classes are marked with an override modifier. */
+    // "noPropertyAccessFromIndexSignature": true,       /* Enforces using indexed accessors for keys declared using an indexed type. */
+    // "allowUnusedLabels": true,                        /* Disable error reporting for unused labels. */
+    // "allowUnreachableCode": true,                     /* Disable error reporting for unreachable code. */
+
+    /* Completeness */
+    // "skipDefaultLibCheck": true,                      /* Skip type checking .d.ts files that are included with TypeScript. */
+    "skipLibCheck": true                                 /* Skip type checking all .d.ts files. */
+  }
+}
+</file>
+
+<file path="wrangler.toml">
+# This is the configuration file for your Cloudflare Worker.
+
+name = "spot-along-server" # The name of your service, will be part of the URL
+main = "src/index.ts"      # The entry point for all initial requests
+compatibility_date = "2024-05-02" # A recent date for modern features
+
+# This section defines our stateful Durable Object.
+[[durable_objects.bindings]]
+name = "ROOM" # This is the name we'll use in code to access the Object
+class_name = "DurableObjectRoom" # The name of the class that defines the Object's logic
+
+# Migrations for Durable Objects
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DurableObjectRoom"]
+</file>
+
+<file path="src/auth.ts">
+// src/auth.ts
+
+import express from 'express';
+import SpotifyWebApi from 'spotify-web-api-node';
+import dotenv from 'dotenv';
+
+// Load environment variables from .env file
+dotenv.config();
+
+const app = express();
+const port = 8888; // The port we'll run the server on
+
+// These are the permissions we need to request from the user
+const scopes = [
+  'user-read-playback-state',
+  'user-modify-playback-state',
+  'user-read-currently-playing',
+];
+
+// Check if credentials are in the .env file
+if (!process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET || !process.env.REDIRECT_URI) {
+  throw new Error(
+    'Missing Spotify credentials. Please check your .env file.'
+  );
+}
+
+// Create the Spotify API client
+const spotifyApi = new SpotifyWebApi({
+  clientId: process.env.SPOTIFY_CLIENT_ID,
+  clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
+  redirectUri: process.env.REDIRECT_URI,
+});
+
+// The /login route starts the authentication process
+app.get('/login', (req, res) => {
+  // Redirect the user to Spotify's authorization page
+  res.redirect(spotifyApi.createAuthorizeURL(scopes, 'some-state-optional'));
+});
+
+// The /callback route is where Spotify redirects the user back to
+app.get('/callback', async (req, res) => {
+  const error = req.query.error;
+  const code = req.query.code as string;
+
+  if (error) {
+    console.error('Callback Error:', error);
+    res.send(`Callback Error: ${error}`);
+    return;
+  }
+
+  try {
+    // Exchange the authorization code for an access token and refresh token
+    const data = await spotifyApi.authorizationCodeGrant(code);
+    const access_token = data.body['access_token'];
+    const refresh_token = data.body['refresh_token'];
+
+    console.log('Successfully retrieved access token!');
+    console.log('Access Token:', access_token);
+    console.log('Refresh Token:', refresh_token);
+    
+    // For now, we'll just show a success message.
+    // In the future, we will save these tokens.
+    res.send('Success! You can close this tab and return to the terminal.');
+
+    // You can now use the access token to make API calls
+    spotifyApi.setAccessToken(access_token);
+    spotifyApi.setRefreshToken(refresh_token);
+
+  } catch (err) {
+    console.error('Error getting Tokens:', err);
+    res.send(`Error getting tokens: ${err}`);
+  }
+});
+
+app.listen(port, () => {
+  console.log(
+    `Authentication server started. Please open this URL in your browser to log in:`
+  );
+  console.log(`http://localhost:${port}/login`);
+});
+</file>
+
+<file path="src/DurableObjectRoom.ts">
+import { WebSocketMessage, RoomStatePayload } from './types';
+import SpotifyWebApi from 'spotify-web-api-node';
+
+  // Cloudflare Workers types
+  declare global {
+    interface DurableObjectState {
+      acceptWebSocket(ws: WebSocket): void;
+    }
+    
+    interface DurableObjectNamespace {
+      idFromName(name: string): DurableObjectId;
+      get(id: DurableObjectId): DurableObjectStub;
+    }
+    
+    interface DurableObjectId {
+      toString(): string;
+    }
+    
+    interface DurableObjectStub {
+      fetch(request: Request): Promise<Response>;
+    }
+    
+    interface WebSocketPair {
+      [0]: WebSocket;
+      [1]: WebSocket;
+    }
+    
+    var WebSocketPair: {
+      new(): WebSocketPair;
+    };
+  }
+
+// Define the structure of a client connected to THIS room
+interface Client {
+  id: string; // Spotify User ID
+  username: string;
+  socket: WebSocket;
+}
+
+// Define the environment variables the Durable Object can access
+export interface Env {
+  ROOM: DurableObjectNamespace;
+}
+
+// The Durable Object Class for a single Room
+export class DurableObjectRoom {
+  state: DurableObjectState;
+  env: Env;
+  clients: Map<WebSocket, Client>;
+  hostId?: string;
+  roomId: string;
+
+  constructor(state: DurableObjectState, env: Env) {
+    this.state = state;
+    this.env = env;
+    this.clients = new Map();
+    this.roomId = ""; // Will be initialized
+  }
+
+  // Broadcasts a message to all clients in this room
+  broadcast(message: WebSocketMessage, exclude?: WebSocket) {
+    const messageString = JSON.stringify(message);
+    this.clients.forEach((client, ws) => {
+      if (ws !== exclude) {
+        ws.send(messageString);
+      }
+    });
+  }
+
+  // Broadcasts the current room state (member list, host)
+  broadcastRoomState() {
+    const payload: RoomStatePayload = {
+      hostId: this.hostId || '',
+      members: Array.from(this.clients.values()).map(c => ({ id: c.id, username: c.username })),
+    };
+    this.broadcast({ type: 'room-state-update', payload });
+  }
+
+  // This is the main entry point for requests to this DO
+  async fetch(request: Request) {
+    // A Durable Object's name is how we identify it. We'll use the room ID.
+    const url = new URL(request.url);
+    this.roomId = url.pathname.split('/')[2];
+    
+    // Upgrade the connection to a WebSocket
+    const upgradeHeader = request.headers.get('Upgrade');
+    if (!upgradeHeader || upgradeHeader !== 'websocket') {
+      return new Response('Expected WebSocket upgrade', { status: 426 });
+    }
+    
+    const [client, server] = Object.values(new WebSocketPair());
+    // This connects the WebSocket to the Durable Object's event handlers
+    this.state.acceptWebSocket(server);
+
+    return new Response(null, { 
+      status: 101, 
+      headers: { 'Upgrade': 'websocket' },
+      webSocket: client 
+    } as any);
+  }
+  
+  // --- WebSocket Event Handlers for THIS room ---
+
+  async onWebSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
+    try {
+      const msg: WebSocketMessage = JSON.parse(message as string);
+      
+      switch (msg.type) {
+        case 'authenticate':
+          // Use a temporary Spotify API client to get user info from the token
+          const tempApi = new SpotifyWebApi({ accessToken: msg.payload.accessToken });
+          const { body: me } = await tempApi.getMe();
+          const clientInfo: Client = { id: me.id, username: me.display_name || me.id, socket: ws };
+          
+          this.clients.set(ws, clientInfo);
+
+          // The first person to authenticate becomes the host
+          if (!this.hostId) {
+            this.hostId = clientInfo.id;
+          }
+
+          ws.send(JSON.stringify({ type: 'authenticated' }));
+          this.broadcastRoomState();
+          break;
+        
+        case 'playback-state-update':
+            const currentClient = this.clients.get(ws);
+            if(currentClient && currentClient.id === this.hostId) {
+                this.broadcast({type: 'force-sync', payload: msg.payload}, ws);
+            }
+            break;
+      }
+    } catch (error) {
+      ws.send(JSON.stringify({type: 'error', payload: {message: "An internal error occurred."}}))
+    }
+  }
+
+  async onWebSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
+    this.clients.delete(ws);
+    this.broadcastRoomState(); // Update the member list for everyone else
+  }
+
+  async onWebSocketError(ws: WebSocket, error: Error) {
+    this.clients.delete(ws);
+    this.broadcastRoomState();
+  }
+}
+</file>
+
+<file path="src/index.ts">
+import { DurableObjectRoom, Env } from './DurableObjectRoom';
+
+// Cloudflare Workers types
+declare global {
+  interface ExecutionContext {
+    waitUntil(promise: Promise<any>): void;
+    passThroughOnException(): void;
+  }
+}
+
+// This is the stateless "front door" worker.
+export default {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const url = new URL(request.url);
+    const path = url.pathname;
+
+    // We'll use URLs like /room/create or /room/join/<id>
+    const pathSegments = path.split('/').filter(Boolean); // Filter out empty segments
+
+    if (pathSegments.length === 0 || pathSegments[0] !== 'room') {
+      return new Response('Not Found', { status: 404 });
+    }
+
+    let roomId: string;
+    
+    // Handle creating a new room
+    if (pathSegments[1] === 'create') {
+        roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
+    } else if (pathSegments[1] === 'join' && pathSegments[2]) {
+        roomId = pathSegments[2];
+    } else {
+        return new Response('Invalid request. Use /room/create or /room/join/<roomId>', { status: 400 });
+    }
+
+    // This is the core logic. Get a "stub" for the Durable Object.
+    // Cloudflare ensures that all requests for the SAME roomId go to the SAME object instance.
+    const doId = env.ROOM.idFromName(roomId);
+    const roomObject = env.ROOM.get(doId);
+    
+    // Create a new URL that includes the room ID for the DO to read
+    const newUrl = new URL(request.url);
+    newUrl.pathname = `/room/connect/${roomId}`;
+
+    // Forward the user's request to the correct Durable Object instance
+    return roomObject.fetch(request);
+  }
+};
+
+// Re-export the DO class so wrangler can find it from the main entrypoint
+export { DurableObjectRoom };
+</file>
+
+<file path="src/spotifyAuth.ts">
+import express from 'express';
+import SpotifyWebApi from 'spotify-web-api-node';
+import open from 'open';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const scopes = [
+  'user-read-playback-state',
+  'user-modify-playback-state',
+  'user-read-currently-playing',
+  'user-read-private',
+];
+
+// This function will return a Promise that resolves with the authenticated API client
+export function authenticate(): Promise<SpotifyWebApi> {
+  return new Promise((resolve, reject) => {
+    const spotifyApi = new SpotifyWebApi({
+      clientId: process.env.SPOTIFY_CLIENT_ID,
+      clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
+      redirectUri: process.env.REDIRECT_URI,
+    });
+
+    const app = express();
+    const server = app.listen(8888, () => {
+      const authUrl = spotifyApi.createAuthorizeURL(scopes, 'some-state');
+      console.log('Please log in to Spotify in the browser that just opened.');
+      open(authUrl);
+    });
+
+    app.get('/callback', async (req, res) => {
+      const code = req.query.code as string;
+      try {
+        const data = await spotifyApi.authorizationCodeGrant(code);
+        spotifyApi.setAccessToken(data.body['access_token']);
+        spotifyApi.setRefreshToken(data.body['refresh_token']);
+        
+        res.send('<h1>Success!</h1><p>You can close this window now.</p>');
+        server.close(); // Shut down the temporary server
+        console.log('Authentication successful!');
+        resolve(spotifyApi); // Resolve the promise with the authenticated client
+      } catch (err) {
+        reject(err);
+      }
+    });
+  });
+}
+</file>
+
+<file path="src/testSync.ts">
+import SpotifyWebApi from 'spotify-web-api-node';
+import { WebSocket } from 'ws';
+import express from 'express';
+import open from 'open';
+import dotenv from 'dotenv';
+import * as readline from 'readline'; // <-- NEW: Import readline
+import { WebSocketMessage, PlaybackStatePayload } from './types';
+
+dotenv.config();
+
+const SERVER_ADDRESS = 'ws://localhost:8080';
+const POLLING_RATE_MS = 2000;
+
+function performOneTimeLogin(clientName: string): Promise<SpotifyWebApi> {
+  return new Promise((resolve, reject) => {
+    console.log(`\n--- Waiting for login for: ${clientName} ---`);
+    const spotifyApi = new SpotifyWebApi({
+      clientId: process.env.SPOTIFY_CLIENT_ID,
+      clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
+      redirectUri: process.env.REDIRECT_URI,
+    });
+
+    const app = express();
+    const port = 8888; // Use the correct port
+    const server = app.listen(port, () => {
+      const authUrl = spotifyApi.createAuthorizeURL(
+        ['user-read-playback-state', 'user-modify-playback-state', 'user-read-currently-playing', 'user-read-private'],
+        'test-state'
+      );
+      console.log(`[${clientName}] Please use the browser to log in to Spotify.`);
+      open(authUrl);
+    });
+
+    app.get('/callback', async (req, res) => {
+      try {
+        const data = await spotifyApi.authorizationCodeGrant(req.query.code as string);
+        spotifyApi.setAccessToken(data.body['access_token']);
+        spotifyApi.setRefreshToken(data.body['refresh_token']);
+        res.send(`<h1>Auth for ${clientName} successful!</h1><p>You can close this tab and return to the terminal.</p>`);
+        server.close();
+        console.log(`[${clientName}] Authentication successful!`);
+        resolve(spotifyApi);
+      } catch (err) {
+        reject(err);
+      }
+    });
+  });
+}
+
+async function runTest() {
+  console.log('Starting Spotisync test script...');
+  
+  // --- Step 1: Authenticate and set up the Host ---
+  const hostApi = await performOneTimeLogin('Host');
+  const hostWs = new WebSocket(SERVER_ADDRESS);
+  let roomId: string | null = null;
+  
+  hostWs.on('open', () => {
+    console.log('[Host] Connected to server. Authenticating...');
+    hostWs.send(JSON.stringify({ type: 'authenticate', payload: { accessToken: hostApi.getAccessToken() } }));
+  });
+
+  hostWs.on('message', (data: any) => {
+    const message: WebSocketMessage = JSON.parse(data.toString());
+    if (message.type === 'authenticated') {
+      console.log('[Host] Authenticated with server. Creating room...');
+      hostWs.send(JSON.stringify({ type: 'create-room', payload: {} }));
+    } else if (message.type === 'room-created') {
+      roomId = message.payload.roomId;
+      console.log(`[Host] Room created with ID: ${roomId}.`);
+      console.log('[Host] Now starting playback polling loop.');
+      startHostPolling(hostApi, hostWs);
+      
+      // --- Step 2: Pause and prepare for the listener ---
+      if (roomId) {
+        prepareForListener(roomId);
+      } 
+    }
+  });
+
+  // --- NEW: Function to pause the script ---
+  const prepareForListener = (joinRoomId: string) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    
+    console.log('\n=============================================================');
+    console.log('IMPORTANT: PREPARE FOR LISTENER LOGIN');
+    console.log('1. Go to your web browser.');
+    console.log('2. Manually go to "spotify.com" and LOG OUT.');
+    console.log('3. Close any extra Spotify tabs.');
+    console.log('=============================================================');
+    
+    rl.question('--> Press ENTER here when you have logged out and are ready for the Listener to log in.', () => {
+        rl.close();
+        startListener(joinRoomId);
+    });
+  };
+}
+
+// Re-paste the unchanged helper functions here for a complete file
+const startHostPolling = (api: SpotifyWebApi, ws: WebSocket) => {
+    setInterval(async () => {
+        try {
+            const state = await api.getMyCurrentPlaybackState();
+            if (state.body && state.body.item && 'artists' in state.body.item) {
+                const payload: PlaybackStatePayload = {
+                    trackName: state.body.item.name,
+                    artistName: state.body.item.artists.map((a: any) => a.name).join(', '),
+                    trackUri: state.body.item.uri,
+                    durationMs: state.body.item.duration_ms,
+                    positionMs: state.body.progress_ms || 0,
+                    isPlaying: state.body.is_playing,
+                    timestamp: Date.now(),
+                };
+                ws.send(JSON.stringify({ type: 'playback-state-update', payload }));
+            }
+        } catch {}
+    }, POLLING_RATE_MS);
+};
+
+const startListener = async (joinRoomId: string) => {
+    const listenerApi = await performOneTimeLogin('Listener');
+    const listenerWs = new WebSocket(SERVER_ADDRESS);
+
+    listenerWs.on('open', () => {
+        console.log('[Listener] Connected to server. Authenticating...');
+        listenerWs.send(JSON.stringify({ type: 'authenticate', payload: { accessToken: listenerApi.getAccessToken() } }));
+    });
+
+    listenerWs.on('message', (data: any) => {
+        const message: WebSocketMessage = JSON.parse(data.toString());
+        if (message.type === 'authenticated') {
+            console.log(`[Listener] Authenticated with server. Joining room ${joinRoomId}...`);
+            listenerWs.send(JSON.stringify({ type: 'join-room', payload: { roomId: joinRoomId } }));
+        } else if (message.type === 'joined-room') {
+            console.log(`[Listener] Successfully joined room ${joinRoomId}. Waiting for sync...`);
+        } else if (message.type === 'force-sync') {
+            console.log(`[Listener] Sync received: ${message.payload.isPlaying ? 'PLAYING' : 'PAUSED'}. Applying...`);
+            const state: PlaybackStatePayload = message.payload;
+            if (state.isPlaying) {
+                listenerApi.play({ uris: [state.trackUri], position_ms: state.positionMs }).catch(() => {});
+            } else {
+                listenerApi.pause().catch(() => {});
+            }
+        }
+    });
+};
+
+runTest();
+</file>
+
+<file path="src/types.ts">
+export interface WebSocketMessage {
+  type: string;
+  payload: any;
+}
+
+// We can also define specific payload structures for clarity
+export interface CreateRoomPayload {
+  // No payload needed for creating a room
+}
+
+export interface JoinRoomPayload {
+  roomId: string;
+}
+
+export interface RoomCreatedPayload {
+  roomId: string;
+}
+
+export interface UserJoinedPayload {
+  clientId: string;
+}
+
+export interface ErrorPayload {
+  message: string;
+}
+
+// Now includes all the data we need for a rich UI
+export interface PlaybackStatePayload {
+  trackName: string;
+  artistName: string;
+  trackUri: string;
+  durationMs: number;
+  positionMs: number;
+  isPlaying: boolean;
+  timestamp: number;
+}
+
+// New interface for room state updates
+export interface RoomStatePayload {
+  hostId: string;
+  members: {
+    id: string;
+    username: string;
+  }[];
+}
+</file>
+
+<file path="src/tokenManager.ts">
+import fs from 'fs-extra';
+import path from 'path';
+import envPaths from 'env-paths';
+import SpotifyWebApi from 'spotify-web-api-node';
+import express from 'express';
+import open from 'open';
+
+// Define the structure of our token data
+interface TokenData {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+}
+
+const paths = envPaths('spot-along', { suffix: '' });
+const configPath = path.join(paths.config, 'config.json');
+
+async function saveTokens(data: TokenData): Promise<void> {
+  try {
+    // Ensure the directory exists, then write the file
+    await fs.ensureDir(path.dirname(configPath));
+    await fs.writeJson(configPath, data);
+    console.log('Tokens saved successfully.');
+  } catch (error) {
+    console.error('Error saving tokens:', error);
+  }
+}
+
+async function loadTokens(): Promise<TokenData | null> {
+  try {
+    // Check if the file exists and load it
+    if (await fs.pathExists(configPath)) {
+      const data = await fs.readJson(configPath);
+      return data as TokenData;
+    }
+    return null; // No config file found
+  } catch (error) {
+    console.error('Error loading tokens:', error);
+    return null;
+  }
+}
+
+// The main function with new validation logic
+export async function getAuthenticatedApi(): Promise<SpotifyWebApi> {
+  const spotifyApi = new SpotifyWebApi({
+    clientId: process.env.SPOTIFY_CLIENT_ID,
+    clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
+    redirectUri: process.env.REDIRECT_URI,
+  });
+
+  const savedTokens = await loadTokens();
+
+  if (savedTokens) {
+    spotifyApi.setAccessToken(savedTokens.accessToken);
+    spotifyApi.setRefreshToken(savedTokens.refreshToken);
+    try {
+      const data = await spotifyApi.refreshAccessToken();
+      const newAccessToken = data.body['access_token'];
+      spotifyApi.setAccessToken(newAccessToken);
+
+      // --- NEW: VALIDATE EVEN REFRESHED TOKENS ---
+      // This handles the case where a user downgrades from Premium to Free.
+      const { body: me } = await spotifyApi.getMe();
+      if (me.product !== 'premium') {
+        await resetConfig(); // Clean up the invalid tokens
+        throw new Error('PREMIUM_REQUIRED_AFTER_REFRESH');
+      }
+
+      await saveTokens({
+        accessToken: newAccessToken,
+        refreshToken: spotifyApi.getRefreshToken()!,
+        expiresAt: Date.now() + data.body['expires_in'] * 1000,
+      });
+      return spotifyApi;
+    } catch (error: any) {
+        await resetConfig(); // Clean up if refresh or validation fails
+        if(error.message === 'PREMIUM_REQUIRED_AFTER_REFRESH') {
+            throw new Error('Your Spotify account is no longer Premium. Please log in with a Premium account.');
+        }
+        // Fall through to full login
+    }
+  }
+
+  // --- Fallback: Full Browser Authentication ---
+  console.log('No valid tokens found. Starting login process...');
+  const tokenData = await fullAuthentication(spotifyApi);
+  spotifyApi.setAccessToken(tokenData.accessToken);
+  spotifyApi.setRefreshToken(tokenData.refreshToken);
+
+  // --- NEW: CRUCIAL VALIDATION STEP BEFORE SAVING ---
+  try {
+    const { body: me } = await spotifyApi.getMe();
+    
+    // Check the 'product' field from the user profile
+    if (me.product !== 'premium') {
+      throw new Error('PREMIUM_REQUIRED'); // Throw a specific error we can catch
+    }
+
+    // If we get here, the user is Premium. NOW it's safe to save.
+    console.log(`Authenticated as Premium user: ${me.display_name}`);
+    await saveTokens(tokenData);
+    return spotifyApi;
+
+  } catch (error: any) {
+    // If validation fails for ANY reason, delete the config file that was just created.
+    await resetConfig(); 
+
+    // Provide a clear, user-friendly error message.
+    if (error.message === 'PREMIUM_REQUIRED') {
+      throw new Error(
+        'This application requires a Spotify Premium account. The login was successful, but your account type is not supported. Please restart and log in with a Premium account.'
+      );
+    } else {
+       // Handle other errors, like the 403 we saw before
+       throw new Error(
+          `Failed to verify your Spotify account details after login (Error: ${error.statusCode || 'Unknown'}). Please check your permissions and try again.`
+       );
+    }
+  }
+}
+
+// Re-paste the helper functions here
+function fullAuthentication(spotifyApi: SpotifyWebApi): Promise<TokenData> {
+  return new Promise((resolve, reject) => {
+    const app = express();
+    const server = app.listen(8888, () => {
+      const authUrl = spotifyApi.createAuthorizeURL(
+        ['user-read-playback-state', 'user-modify-playback-state', 'user-read-currently-playing', 'user-read-private'], // ensure user-read-private is here
+        'some-state'
+      );
+      console.log('Please log in to Spotify in the browser that just opened.');
+      open(authUrl);
+    });
+
+    app.get('/callback', async (req, res) => {
+      const code = req.query.code as string;
+      try {
+        const data = await spotifyApi.authorizationCodeGrant(code);
+        res.send('<h1>Success!</h1><p>You can close this window now.</p>');
+        server.close();
+        
+        const tokenData: TokenData = {
+          accessToken: data.body['access_token'],
+          refreshToken: data.body['refresh_token'],
+          expiresAt: Date.now() + data.body['expires_in'] * 1000,
+        };
+        resolve(tokenData);
+      } catch (err) {
+        reject(err);
+      }
+    });
+  });
+}
+
+export function getConfigPath(): string {
+  const paths = envPaths('spot-along', { suffix: '' });
+  return path.join(paths.config, 'config.json');
+}
+
+export async function resetConfig(): Promise<void> {
+  const configFilePath = getConfigPath();
+  try {
+    if (await fs.pathExists(configFilePath)) {
+      await fs.remove(configFilePath);
+      console.log('Configuration file has been reset.');
+    }
+  } catch (error) {
+    console.error('Failed to reset configuration:', error);
+  }
+}
+</file>
+
+<file path="src/client.ts">
+import { WebSocket } from 'ws';
+import * as readline from 'readline';
+import dotenv from 'dotenv';
+import chalk from 'chalk';
+import { getAuthenticatedApi, resetConfig } from './tokenManager';
+import { WebSocketMessage, PlaybackStatePayload, RoomStatePayload } from './types';
+import * as UIManager from './uiManager';
+
+dotenv.config({ quiet: true });
+
+// THIS WILL BE YOUR PUBLIC CLOUDFLARE URL
+const BASE_SERVER_ADDRESS = 'spot-along-server.sarthakshitole.workers.dev'; 
+
+let currentMode = 'menu';
+let ws: WebSocket | null = null;
+let spotifyApi: any;
+let isHost = false;
+
+async function connectToRoom(path: string) {
+    // Use wss:// for secure connections
+    const fullAddress = `wss://${BASE_SERVER_ADDRESS}/room/${path}`;
+    ws = new WebSocket(fullAddress);
+
+    ws.on('open', () => {
+        console.log('Connected to room!');
+        ws!.send(JSON.stringify({ type: 'authenticate', payload: { accessToken: spotifyApi.getAccessToken() } }));
+    });
+
+    ws.on('message', (data: any) => {
+        const message: WebSocketMessage = JSON.parse(data.toString());
+        switch (message.type) {
+            case 'authenticated':
+                console.log('Authenticated with server!');
+                break;
+            case 'room-created':
+                UIManager.setRoom(message.payload.roomId);
+                currentMode = 'in-room';
+                UIManager.setMode('in-room');
+                startHostPolling();
+                break;
+            case 'joined-room':
+                UIManager.setRoom(message.payload.roomId);
+                currentMode = 'in-room';
+                UIManager.setMode('in-room');
+                break;
+            case 'room-state-update':
+                UIManager.setRoomState(message.payload);
+                break;
+            case 'force-sync':
+                if (!isHost) {
+                    const state: PlaybackStatePayload = message.payload;
+                    UIManager.setPlaybackState(state);
+                    if (state.isPlaying) spotifyApi.play({ uris: [state.trackUri], position_ms: state.positionMs }).catch(() => {});
+                    else spotifyApi.pause().catch(() => {});
+                }
+                break;
+            case 'error':
+                UIManager.showNotification(`SERVER ERROR: ${message.payload.message}`);
+                currentMode = 'menu';
+                UIManager.setMode('menu');
+                break;
+        }
+        UIManager.render();
+    });
+
+    ws.on('close', () => {
+        if(hostPollingInterval) clearInterval(hostPollingInterval);
+        console.log('Connection to server lost.');
+        process.exit();
+    });
+}
+
+let hostPollingInterval: NodeJS.Timeout;
+const startHostPolling = () => {
+    isHost = true;
+    hostPollingInterval = setInterval(async () => {
+        try {
+            const state = await spotifyApi.getMyCurrentPlaybackState();
+            if (state.body && state.body.item && 'artists' in state.body.item) {
+                const currentState: PlaybackStatePayload = {
+                    trackName: state.body.item.name,
+                    artistName: state.body.item.artists.map((a: any) => a.name).join(', '),
+                    trackUri: state.body.item.uri,
+                    durationMs: state.body.item.duration_ms,
+                    positionMs: state.body.progress_ms || 0,
+                    isPlaying: state.body.is_playing,
+                    timestamp: Date.now(),
+                };
+                UIManager.setPlaybackState(currentState);
+                ws!.send(JSON.stringify({ type: 'playback-state-update', payload: currentState }));
+            } else {
+                UIManager.setPlaybackState(null!);
+            }
+            UIManager.render();
+        } catch {}
+    }, 2000);
+};
+
+// Setup readline for user input
+const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+});
+
+async function main() {
+    try {
+        spotifyApi = await getAuthenticatedApi();
+        const me = await spotifyApi.getMe();
+        UIManager.setUsername(me.body.display_name || 'Spotify User');
+
+        readline.emitKeypressEvents(process.stdin);
+        if (process.stdin.isTTY) process.stdin.setRawMode(true);
+        
+        process.stdin.on('keypress', (str, key) => {
+            if (key.ctrl && key.name === 'c' || (currentMode !== 'menu' && key.name === 'q')) {
+                process.exit();
+            }
+
+            if (currentMode === 'menu') {
+                if (key.name === 'c') {
+                    connectToRoom('create');
+                }
+                if (key.name === 'h') { 
+                    currentMode = 'help'; 
+                    UIManager.setMode('help'); 
+                }
+                if (key.name === 'q') process.exit();
+                
+                if (key.name === 'j') {
+                    currentMode = 'prompt';
+                    
+                    if (process.stdin.isTTY) process.stdin.setRawMode(false);
+                    
+                    rl.question(chalk.cyanBright('Enter Room ID to join: '), (roomId) => {
+                        if(roomId) {
+                            connectToRoom(`join/${roomId.trim().toUpperCase()}`);
+                        }
+                        if (process.stdin.isTTY) process.stdin.setRawMode(true);
+                        currentMode = 'menu';
+                        UIManager.setMode('menu');
+                        UIManager.render();
+                    });
+                    return;
+                }
+            } else if (currentMode === 'help') {
+                if (key.name === 'b') { 
+                    currentMode = 'menu'; 
+                    UIManager.setMode('menu'); 
+                }
+                if (key.name === 'r') {
+                    resetConfig();
+                    UIManager.showNotification('Configuration Reset! Please restart.');
+                    setTimeout(() => process.exit(), 1000);
+                }
+            }
+            UIManager.render();
+        });
+
+        process.on('exit', () => console.log(`\n${chalk.bold.magenta('Happy Listening!')}\n`));
+        
+        UIManager.render();
+
+    } catch (error) {
+        console.error('Application failed to start:', error);
+        process.exit(1);
+    }
+}
+
+main();
+</file>
+
+<file path="src/uiManager.ts">
+import chalk from 'chalk';
+import logUpdate from 'log-update';
+import chalkAnimation from 'chalk-animation';
+import { PlaybackStatePayload, RoomStatePayload } from './types';
+import * as TokenManager from './tokenManager';
+
+const uiState = {
+  username: 'User',
+  mode: 'menu' as 'menu' | 'in-room' | 'help',
+  room: null as string | null,
+  lastPlaybackState: null as PlaybackStatePayload | null,
+  roomState: null as RoomStatePayload | null, // Add new state property
+  notification: null as string | null,
+};
+
+const titleAnimation = chalkAnimation.karaoke('Spot-along', 2);
+
+// A helper for creating hyperlinks in modern terminals
+const link = (text: string, url: string) => `\u001b]8;;${url}\u0007${text}\u001b]8;;\u0007`;
+
+function createProgressBar(progress: number, width = 30): string {
+  const filled = Math.round(progress * width);
+  const empty = width - filled;
+  return `[${chalk.green('━'.repeat(filled))}${chalk.gray('━'.repeat(empty))}]`;
+}
+
+function formatDuration(ms: number): string {
+    const totalSeconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+}
+
+// The main render loop using log-update for flicker-free UI
+export function render() {
+  const header = `\n`; // We let the animation handle the title now
+  const footer = `\n${chalk.gray('──────────────────────────────────')}\nMade with ${chalk.red('♥')} by ${link('x.com/Sarthakhuh', 'https://x.com/Sarthakhuh')}`;
+
+  let mainContent = '';
+  if (uiState.mode === 'menu') mainContent = drawMenu();
+  if (uiState.mode === 'in-room') mainContent = drawInRoomUI();
+  if (uiState.mode === 'help') mainContent = drawHelpScreen();
+
+  logUpdate(`${header}${mainContent}${footer}`);
+}
+
+function drawMenu(): string {
+  let content = `${chalk.bold(`Welcome, ${chalk.yellow(uiState.username)}!`)}\n\n`;
+  content += `${chalk.cyanBright.bold('[c]')} - Create a new listening room\n`;
+  content += `${chalk.cyanBright.bold('[j]')} - Join a room\n`;
+  content += `${chalk.cyanBright.bold('[h]')} - Help & Settings\n`;
+  content += `${chalk.cyanBright.bold('[q]')} - Quit\n`;
+  if(uiState.notification) content += chalk.yellow(`\n⚡ ${uiState.notification}`);
+  return content;
+}
+
+function drawInRoomUI(): string {
+  const playbackState = uiState.lastPlaybackState;
+  const roomState = uiState.roomState;
+
+  let content = `${chalk.bold(`› In Room: ${chalk.greenBright(uiState.room)}`)}\n\n`;
+
+  // --- Render Playback Info ---
+  if (!playbackState || !playbackState.isPlaying) {
+    content += chalk.bold.red('⏹️ Nothing is playing on Spotify.');
+  } else {
+    const progressPercent = playbackState.positionMs / playbackState.durationMs;
+    const progressBar = createProgressBar(progressPercent);
+    content += `🎧 ${chalk.bold.white(playbackState.trackName)}\n`;
+    content += `   ${chalk.cyan(playbackState.artistName)}\n\n`;
+    content += `   ${progressBar} ${formatDuration(playbackState.positionMs)} / ${formatDuration(playbackState.durationMs)}`;
+  }
+  
+  // --- NEW: Render Member List ---
+  content += `\n\n${chalk.bold('Members in Room:')}\n`;
+  if (roomState && roomState.members) {
+    roomState.members.forEach(member => {
+      if (member.id === roomState.hostId) {
+        content += ` ${chalk.yellow('👑')} ${chalk.bold(member.username)} (Host)\n`;
+      } else {
+        content += `    ${member.username}\n`;
+      }
+    });
+  }
+
+  content += `\n\n${chalk.gray('Press [q] to leave the room and quit.')}`;
+  return content;
+}
+
+function drawHelpScreen(): string {
+    const configPath = TokenManager.getConfigPath();
+    let content = `${chalk.bold.yellow('⚙️ Help & Settings')}\n\n`;
+    content += `This application saves your Spotify authentication tokens so you don't have to log in every time. The configuration file is stored at:\n`;
+    content += `${chalk.cyan(configPath)}\n\n`;
+    content += `If you are having issues, you can reset the application by deleting this file.\n\n`;
+    content += `${chalk.redBright.bold('[r]')} - Reset Configuration (deletes the file)\n`;
+    content += `${chalk.cyanBright.bold('[b]')} - Back to Main Menu\n`;
+    return content;
+}
+
+// --- UI State Updaters ---
+export function setUsername(name: string) { uiState.username = name; }
+export function setMode(mode: 'menu' | 'in-room' | 'help') { uiState.mode = mode; }
+export function setRoom(roomId: string) { uiState.room = roomId; uiState.mode = 'in-room'; }
+export function setPlaybackState(state: PlaybackStatePayload) { uiState.lastPlaybackState = state; }
+
+// NEW: Function to update the room state from the client
+export function setRoomState(state: RoomStatePayload) {
+  uiState.roomState = state;
+}
+
+export function showNotification(message: string, duration = 3000) {
+    uiState.notification = message;
+    render();
+    setTimeout(() => {
+        uiState.notification = null;
+        render();
+    }, duration);
+}
+</file>
+
+<file path="package.json">
+{
+  "name": "spot-along",
+  "version": "1.0.0",
+  "description": "Real-time Spotify listening parties, right in your terminal.",
+  "main": "dist/client.js",
+  "bin": {
+    "spot-along": "dist/client.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
+    "start:client": "ts-node src/client.ts",
+    "test:sync": "ts-node src/testSync.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "spotify",
+    "cli",
+    "terminal",
+    "tui",
+    "music",
+    "listen-along",
+    "party",
+    "sync"
+  ],
+  "author": "Sarthak (https://x.com/Sarthakhuh)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Sarthakischill/spot-along.git"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "chalk-animation": "^1.6.0",
+    "dotenv": "^16.4.5",
+    "env-paths": "^3.0.0",
+    "express": "^4.19.2",
+    "fs-extra": "^11.2.0",
+    "log-update": "^4.0.0",
+    "open": "^8.4.2",
+    "spotify-web-api-node": "^5.0.2",
+    "ws": "^8.17.1"
+  },
+  "devDependencies": {
+    "@types/boxen": "^3.0.5",
+    "@types/chalk": "^2.2.0",
+    "@types/chalk-animation": "^1.6.3",
+    "@types/cli-progress": "^3.11.5",
+    "@types/express": "^4.17.21",
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^16.18.101",
+    "@types/open": "^6.2.1",
+    "@types/spotify-web-api-node": "^5.0.11",
+    "@types/ws": "^8.5.10",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.5.3"
+  }
+}
+</file>
+
+</files>

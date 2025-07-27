@@ -1,0 +1,15 @@
+# This is the configuration file for your Cloudflare Worker.
+
+name = "spot-along-server" # The name of your service, will be part of the URL
+main = "src/index.ts"      # The entry point for all initial requests
+compatibility_date = "2024-05-10" # A recent date for modern features
+
+# This section defines our stateful Durable Object.
+[[durable_objects.bindings]]
+name = "ROOM" # This is the name we'll use in code to access the Object
+class_name = "DurableObjectRoom" # The name of the class that defines the Object's logic
+
+# FIX: Changed from new_classes to new_sqlite_classes for free plan compatibility
+[[migrations]]
+tag = "v1" # A unique tag for this version of the DO
+new_sqlite_classes = ["DurableObjectRoom"] # The classes being migrated 

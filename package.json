@@ -1,0 +1,59 @@
+{
+  "name": "listenalong",
+  "version": "1.0.4",
+  "description": "Real-time Spotify listening parties, right in your terminal.",
+  "main": "dist/client.js",
+  "bin": {
+    "listenalong": "dist/client.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
+    "start": "ts-node src/client.ts",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "spotify",
+    "cli",
+    "terminal",
+    "tui",
+    "music",
+    "listen-along",
+    "party",
+    "sync"
+  ],
+  "author": "Sarthak (https://x.com/Sarthakhuh)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Sarthakischill/spot-along.git"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "chalk-animation": "^1.6.0",
+    "dotenv": "^16.4.5",
+    "env-paths": "^3.0.0",
+    "express": "^4.19.2",
+    "fs-extra": "^11.2.0",
+    "log-update": "^4.0.0",
+    "open": "^8.4.2",
+    "spotify-web-api-node": "^5.0.2",
+    "ws": "^8.17.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240502.0",
+    "@types/chalk-animation": "^1.6.3",
+    "@types/express": "^4.17.21",
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^18.19.33",
+    "@types/spotify-web-api-node": "^5.0.11",
+    "@types/ws": "^8.5.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.3",
+    "wrangler": "^4.26.0"
+  }
+}
