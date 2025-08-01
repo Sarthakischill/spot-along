@@ -87,6 +87,56 @@ export default {
             return new Response(tokenString, { headers: { 'Content-Type': 'application/json' } });
         }
 
+        // --- NEW ENDPOINT TO HANDLE TOKEN REFRESHING ---
+        if (path === '/refresh') {
+            // We only expect POST requests here
+            if (request.method !== 'POST') {
+                return new Response('Method Not Allowed', { status: 405 });
+            }
+
+            try {
+                const body = await request.json();
+                const refreshToken = body.refresh_token;
+
+                if (!refreshToken) {
+                    return new Response('Error: refresh_token is required in the body.', { status: 400 });
+                }
+
+                const tokenUrl = "https://accounts.spotify.com/api/token";
+                const credentials = `${env.SPOTIFY_CLIENT_ID}:${env.SPOTIFY_CLIENT_SECRET}`;
+                
+                const refreshBody = new URLSearchParams({
+                    grant_type: 'refresh_token',
+                    refresh_token: refreshToken
+                });
+
+                const response = await fetch(tokenUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Basic ${btoa(credentials)}`,
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: refreshBody.toString()
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.text();
+                    throw new Error(`Failed to refresh token from Spotify: ${errorData}`);
+                }
+                
+                const newTokens = await response.json();
+                
+                // Return the new token data (especially the new access_token) to the client
+                return new Response(JSON.stringify(newTokens), {
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : "Unknown refresh error";
+                return new Response(`Token refresh failed: ${errorMessage}`, { status: 500 });
+            }
+        }
+
         return new Response('Not Found.', { status: 404 });
     },
 };

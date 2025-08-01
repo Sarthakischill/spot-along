@@ -59,6 +59,7 @@ const uiState = {
     roomState: null, // Add new state property
     notification: null,
     notificationTimeout: null,
+    lastRender: 0,
 };
 const titleAnimation = chalk_animation_1.default.karaoke('ListenAlong', 2);
 // A helper for creating hyperlinks in modern terminals
@@ -79,8 +80,15 @@ function formatDuration(ms) {
 // The main render loop using log-update for flicker-free UI
 function render() {
     var _a;
+    // Don't render if in prompt mode
+    if (uiState.mode === 'prompt')
+        return;
+    // Throttle renders to prevent flickering (max 10 renders per second)
+    const now = Date.now();
+    if (now - uiState.lastRender < 100)
+        return;
+    uiState.lastRender = now;
     process.stdout.write('\x1B[?25l'); // Hide cursor
-    log_update_1.default.clear();
     let mainContent = '';
     if (uiState.mode === 'menu')
         mainContent = drawMenu();
@@ -88,53 +96,70 @@ function render() {
         mainContent = drawInRoomUI();
     else if (uiState.mode === 'help')
         mainContent = drawHelpScreen();
-    // When prompting, we let readline handle the output, so we draw nothing.
-    else if (uiState.mode === 'prompt')
-        return;
     const header = `${chalk_1.default.bold.magenta('🎵 ListenAlong')} - Welcome, ${chalk_1.default.cyan(((_a = uiState.me) === null || _a === void 0 ? void 0 : _a.username) || 'User')}\n`;
-    const footer = `\n${chalk_1.default.gray('──────────────────────────────────')}\nMade with ${chalk_1.default.red('♥')} by ${link('Sarthak', 'https://x.com/Sarthakhuh')}`;
+    const footer = `\n${chalk_1.default.gray('──────────────────────────────────')}\nMade with ${chalk_1.default.red('♥')} by ${chalk_1.default.cyan('Sarthak')} (x.com/Sarthakhuh)`;
     let notificationLine = '';
     if (uiState.notification) {
         notificationLine = `\n\n${chalk_1.default.yellow('⚡')} ${chalk_1.default.yellow(uiState.notification)}`;
     }
-    (0, log_update_1.default)(`${header}${mainContent}${notificationLine}${footer}`);
+    const fullContent = `${header}${mainContent}${notificationLine}${footer}`;
+    // Use logUpdate for flicker-free rendering
+    (0, log_update_1.default)(fullContent);
 }
 function drawMenu() {
     let content = `\n${chalk_1.default.bold('Main Menu')}\n\n`;
     content += `  ${chalk_1.default.cyanBright.bold('[c]')} - Create a new listening room\n`;
     content += `  ${chalk_1.default.cyanBright.bold('[j]')} - Join an existing room\n`;
     content += `  ${chalk_1.default.cyanBright.bold('[h]')} - Help & Settings\n\n`;
-    content += `  ${chalk_1.default.cyanBright.bold('[q]')} - Quit\n`;
+    content += `  ${chalk_1.default.cyanBright.bold('[q]')} - Quit\n\n`;
+    content += `${chalk_1.default.gray('💡 Tip: Make sure Spotify is open and playing music before creating a room!')}`;
     return content;
 }
 function drawInRoomUI() {
+    var _a, _b;
     const playbackState = uiState.lastPlaybackState;
     const roomState = uiState.roomState;
-    let content = `${chalk_1.default.bold('› In Room:')} ${chalk_1.default.greenBright(uiState.room)}\n\n`;
-    if (!playbackState || !playbackState.trackName) {
-        content += chalk_1.default.bold.red('⏹️ Playback is paused or nothing is active on Spotify.');
+    const isHost = (roomState === null || roomState === void 0 ? void 0 : roomState.hostId) === ((_a = uiState.me) === null || _a === void 0 ? void 0 : _a.id);
+    let content = `${chalk_1.default.bold('› In Room:')} ${chalk_1.default.greenBright(uiState.room)}\n`;
+    if (isHost) {
+        content += `${chalk_1.default.yellow('👑 You are the host')} - Control music with your Spotify app\n\n`;
     }
     else {
-        const progressPercent = playbackState.positionMs / playbackState.durationMs;
-        const progressBar = createProgressBar(progressPercent);
-        content += `  🎧 ${chalk_1.default.bold.white(playbackState.trackName)}\n`;
-        content += `     ${chalk_1.default.cyan(playbackState.artistName)}\n\n`;
-        content += `     ${progressBar} ${formatDuration(playbackState.positionMs)} / ${formatDuration(playbackState.durationMs)}`;
+        content += `${chalk_1.default.cyan('🎧 Listening along')} - Music will sync automatically\n\n`;
     }
-    content += `\n\n${chalk_1.default.bold('Members in Room:')}\n`;
+    if (!playbackState || !playbackState.trackName) {
+        if (isHost) {
+            content += `${chalk_1.default.yellow('⏸️  No music playing')} - Start playing music in your Spotify app to begin the session\n`;
+        }
+        else {
+            content += `${chalk_1.default.gray('⏸️  Waiting for host to start music...')}\n`;
+        }
+    }
+    else {
+        const progressPercent = Math.max(0, Math.min(1, playbackState.positionMs / playbackState.durationMs));
+        const progressBar = createProgressBar(progressPercent);
+        const statusIcon = playbackState.isPlaying ? '▶️' : '⏸️';
+        content += `  ${statusIcon} ${chalk_1.default.bold.white(playbackState.trackName)}\n`;
+        content += `     ${chalk_1.default.cyan(playbackState.artistName)}\n\n`;
+        content += `     ${progressBar} ${formatDuration(playbackState.positionMs)} / ${formatDuration(playbackState.durationMs)}\n`;
+    }
+    content += `\n${chalk_1.default.bold('Members in Room:')} ${((_b = roomState === null || roomState === void 0 ? void 0 : roomState.members) === null || _b === void 0 ? void 0 : _b.length) || 0}/10\n`;
     if (roomState && roomState.members) {
         roomState.members.forEach(member => {
             var _a;
             const isYou = member.id === ((_a = uiState.me) === null || _a === void 0 ? void 0 : _a.id) ? chalk_1.default.gray(' (you)') : '';
             if (member.id === roomState.hostId) {
-                content += `   ${chalk_1.default.yellow('👑')} ${chalk_1.default.bold(member.username)} (Host)${isYou}\n`;
+                content += `   ${chalk_1.default.yellow('👑')} ${chalk_1.default.bold(member.username)} ${chalk_1.default.yellow('(Host)')}${isYou}\n`;
             }
             else {
-                content += `      ${member.username}${isYou}\n`;
+                content += `   ${chalk_1.default.gray('🎧')} ${member.username}${isYou}\n`;
             }
         });
     }
-    content += `\n\n${chalk_1.default.gray('Press [q] to leave the room.')}`;
+    else {
+        content += `   ${chalk_1.default.gray('Loading member list...')}\n`;
+    }
+    content += `\n${chalk_1.default.gray('Press [q] to leave the room')}`;
     return content;
 }
 function drawHelpScreen() {
@@ -160,9 +185,11 @@ function showNotification(message, duration = 3000) {
     if (uiState.notificationTimeout)
         clearTimeout(uiState.notificationTimeout);
     uiState.notification = message;
+    if (duration > 0) {
+        uiState.notificationTimeout = setTimeout(() => {
+            uiState.notification = null;
+            render();
+        }, duration);
+    }
     render();
-    uiState.notificationTimeout = setTimeout(() => {
-        uiState.notification = null;
-        render();
-    }, duration);
 }

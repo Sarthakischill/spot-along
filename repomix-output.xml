@@ -40,17 +40,20 @@ The content is organized as follows:
 </file_summary>
 
 <directory_structure>
+auth-server/
+  index.js
+  package.json
+  README.md
+  wrangler.toml
 src/
-  auth.ts
   client.ts
   DurableObjectRoom.ts
   index.ts
-  spotifyAuth.ts
-  testSync.ts
   tokenManager.ts
   types.ts
   uiManager.ts
 .gitignore
+DEPLOYMENT.md
 package.json
 README.md
 tsconfig.json
@@ -60,137 +63,1997 @@ wrangler.toml
 <files>
 This section contains the contents of the repository's files.
 
+<file path="auth-server/index.js">
+// The final, corrected, dependency-free auth worker code
+
+export default {
+    async fetch(request, env, ctx) {
+        const url = new URL(request.url);
+        const path = url.pathname;
+
+        if (path === '/login') {
+            const sessionId = url.searchParams.get('sessionId');
+            if (!sessionId) {
+                return new Response('Error: sessionId is required.', { status: 400 });
+            }
+
+            const scopes = 'user-read-playback-state user-modify-playback-state user-read-currently-playing user-read-private';
+            const params = new URLSearchParams({
+                response_type: 'code',
+                client_id: env.SPOTIFY_CLIENT_ID,
+                scope: scopes,
+                redirect_uri: `${url.origin}/callback`,
+                state: sessionId // Pass the sessionId to Spotify so it comes back to us
+            });
+
+            return Response.redirect(`https://accounts.spotify.com/authorize?${params.toString()}`, 302);
+        }
+
+        if (path === '/callback') {
+            const code = url.searchParams.get('code');
+            const sessionId = url.searchParams.get('state'); // Get the sessionId back from Spotify
+
+            if (!code || !sessionId) {
+                return new Response('Error: Invalid callback from Spotify.', { status: 400 });
+            }
+
+            try {
+                // Exchange the code for tokens
+                const tokenUrl = "https://accounts.spotify.com/api/token";
+                const credentials = `${env.SPOTIFY_CLIENT_ID}:${env.SPOTIFY_CLIENT_SECRET}`;
+                const body = new URLSearchParams({
+                    grant_type: 'authorization_code',
+                    code: code,
+                    redirect_uri: `${url.origin}/callback`
+                });
+
+                const response = await fetch(tokenUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Basic ${btoa(credentials)}`,
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: body.toString()
+                });
+
+                if (!response.ok) throw new Error('Failed to get token from Spotify.');
+
+                const tokens = await response.json();
+
+                // Store the tokens in the KV store with a 2-minute expiration
+                await env.TOKEN_STORE.put(sessionId, JSON.stringify(tokens), { expirationTtl: 120 });
+
+                // Show a simple success page
+                const html = `<!DOCTYPE html><html lang="en"><head><title>Success!</title><style>body{font-family:sans-serif;background:#121212;color:white;display:flex;justify-content:center;align-items:center;height:100vh}div{text-align:center}h1{color:#1DB954}</style></head><body><div><h1>✅ Success!</h1><p>You have been authenticated. Please return to your terminal.</p><p style="color:#888">(This window will close automatically in a moment)</p></div><script>setTimeout(()=>window.close(),2000)</script></body></html>`;
+                return new Response(html, { headers: { 'Content-Type': 'text/html' } });
+
+            } catch (error) {
+                return new Response(`Authentication failed: ${error.message}`, { status: 500 });
+            }
+        }
+        
+        // New endpoint for the CLI to poll
+        if (path === '/check-token') {
+            const sessionId = url.searchParams.get('sessionId');
+            if (!sessionId) {
+                return new Response('Error: sessionId is required.', { status: 400 });
+            }
+
+            const tokenString = await env.TOKEN_STORE.get(sessionId);
+
+            if (!tokenString) {
+                // Tokens are not ready yet, tell the CLI to keep polling
+                return new Response(null, { status: 404 }); // Not Found
+            }
+
+            // Tokens found! Delete them so they can't be retrieved again.
+            await env.TOKEN_STORE.delete(sessionId);
+            
+            // Send the tokens to the CLI
+            return new Response(tokenString, { headers: { 'Content-Type': 'application/json' } });
+        }
+
+        // --- NEW ENDPOINT TO HANDLE TOKEN REFRESHING ---
+        if (path === '/refresh') {
+            // We only expect POST requests here
+            if (request.method !== 'POST') {
+                return new Response('Method Not Allowed', { status: 405 });
+            }
+
+            try {
+                const body = await request.json();
+                const refreshToken = body.refresh_token;
+
+                if (!refreshToken) {
+                    return new Response('Error: refresh_token is required in the body.', { status: 400 });
+                }
+
+                const tokenUrl = "https://accounts.spotify.com/api/token";
+                const credentials = `${env.SPOTIFY_CLIENT_ID}:${env.SPOTIFY_CLIENT_SECRET}`;
+                
+                const refreshBody = new URLSearchParams({
+                    grant_type: 'refresh_token',
+                    refresh_token: refreshToken
+                });
+
+                const response = await fetch(tokenUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Basic ${btoa(credentials)}`,
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: refreshBody.toString()
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.text();
+                    throw new Error(`Failed to refresh token from Spotify: ${errorData}`);
+                }
+                
+                const newTokens = await response.json();
+                
+                // Return the new token data (especially the new access_token) to the client
+                return new Response(JSON.stringify(newTokens), {
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : "Unknown refresh error";
+                return new Response(`Token refresh failed: ${errorMessage}`, { status: 500 });
+            }
+        }
+
+        return new Response('Not Found.', { status: 404 });
+    },
+};
+</file>
+
+<file path="auth-server/package.json">
+{
+  "name": "spot-along-auth-server",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker for handling Spotify OAuth2 flow for the ListenAlong CLI.",
+  "main": "index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240502.0",
+    "wrangler": "^3.63.0"
+  }
+}
+</file>
+
+<file path="auth-server/README.md">
+# Spot-along Authentication Service
+
+This is the centralized authentication service for the Spot-along CLI application. It handles Spotify OAuth flow and provides a secure way for users to authenticate without needing to set up their own Spotify apps.
+
+## Setup
+
+1. **Get Spotify API Credentials:**
+   - Go to [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+   - Create a new app or use an existing one
+   - Copy your Client ID and Client Secret
+
+2. **Deploy to Cloudflare Workers:**
+   ```bash
+   # Install dependencies
+   npm install
+   
+   # Login to Cloudflare
+   npx wrangler login
+   
+   # Set environment variables
+   npx wrangler secret put SPOTIFY_CLIENT_ID
+   npx wrangler secret put SPOTIFY_CLIENT_SECRET
+   
+   # Deploy
+   npm run deploy
+   ```
+
+3. **Configure Spotify App:**
+   - Go back to your Spotify Developer Dashboard
+   - Edit your app settings
+   - Add the redirect URI: `https://spot-along-auth.sarthakshitole.workers.dev/callback`
+   - Save the settings
+
+## How It Works
+
+1. User runs `npx spot-along`
+2. CLI opens browser to `https://spot-along-auth.sarthakshitole.workers.dev/login`
+3. User logs into Spotify and authorizes the app
+4. Spotify redirects to `/callback` with an authorization code
+5. Service exchanges code for access/refresh tokens
+6. Service displays tokens in a user-friendly page
+7. User copies tokens and pastes them into CLI
+8. CLI saves tokens locally and continues
+
+## Security
+
+- No tokens are stored on the server
+- Tokens are only displayed to the user once
+- CORS is properly configured
+- Environment variables are securely stored in Cloudflare Workers
+
+## Development
+
+```bash
+# Run locally
+npm run dev
+
+# Deploy to staging
+npx wrangler deploy --env staging
+```
+</file>
+
+<file path="auth-server/wrangler.toml">
+name = "spot-along-auth"
+main = "index.js"
+compatibility_date = "2024-05-10"
+
+# This section correctly binds your KV namespace to this authentication worker.
+[[kv_namespaces]]
+binding = "TOKEN_STORE"
+# The ID from your screenshot for production deploys.
+id = "80fc25fb6db746458bad163a53d054d1"
+# The same ID can be used for local testing (`wrangler dev`). [9, 10]
+preview_id = "80fc25fb6db746458bad163a53d054d1"
+</file>
+
+<file path="src/client.ts">
+#!/usr/bin/env node
+
+console.log('--- EXECUTING SPOTALONG VERSION 1.0.1 ---');
+
+import WebSocket from 'ws';
+import * as readline from 'readline';
+import dotenv from 'dotenv';
+import chalk from 'chalk';
+import { getAuthenticatedApi, resetConfig } from './tokenManager';
+import { WebSocketMessage, PlaybackStatePayload, RoomStatePayload } from './types';
+import * as UIManager from './uiManager';
+
+dotenv.config({ quiet: true });
+
+const BASE_SERVER_ADDRESS = 'spot-along-server.sarthakshitole.workers.dev';
+
+let currentMode = 'menu';
+let ws: WebSocket | null = null;
+let spotifyApi: any;
+let isHost = false;
+let hostPollingInterval: NodeJS.Timeout | null = null;
+let isConnecting = false;
+let connectionTimeout: NodeJS.Timeout | null = null;
+
+const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+});
+
+// Main keypress handler with proper state management
+const keypressHandler = async (str: string, key: any) => {
+    if (key.ctrl && key.name === 'c') {
+        cleanup();
+        process.exit();
+    }
+
+    // Ignore input if we're connecting or in prompt mode
+    if (isConnecting || currentMode === 'prompt') {
+        return;
+    }
+
+    if (currentMode === 'menu') {
+        switch (key.name) {
+            case 'c':
+                if (!isConnecting) {
+                    await connectToRoom('create');
+                }
+                return;
+            case 'j':
+                if (!isConnecting) {
+                    const roomId = await promptForRoomId();
+                    if (roomId) {
+                        await connectToRoom('join', roomId);
+                    }
+                    UIManager.render();
+                }
+                return;
+            case 'h':
+                currentMode = 'help';
+                UIManager.setMode('help');
+                break;
+            case 'q':
+                cleanup();
+                process.exit();
+        }
+    } else if (currentMode === 'in-room') {
+        if (key.name === 'q') {
+            leaveRoom();
+        }
+    } else if (currentMode === 'help') {
+        if (key.name === 'b') {
+            currentMode = 'menu';
+            UIManager.setMode('menu');
+        }
+        if (key.name === 'r') {
+            await resetConfig();
+            UIManager.showNotification('Configuration Reset! Please restart.', 2000);
+            setTimeout(() => process.exit(), 2000);
+            return;
+        }
+    }
+    UIManager.render();
+};
+
+async function connectToRoom(action: 'create' | 'join', roomId?: string) {
+    if (isConnecting) {
+        UIManager.showNotification('Already connecting...', 2000);
+        UIManager.render();
+        return;
+    }
+
+    isConnecting = true;
+    const path = action === 'create' ? 'create' : `join/${roomId}`;
+    const fullAddress = `wss://${BASE_SERVER_ADDRESS}/room/${path}`;
+
+    // Clean up any existing connections
+    cleanup();
+
+    try {
+        // Validate Spotify API token before connecting
+        await spotifyApi.getMe();
+    } catch (error) {
+        // Try to refresh token if validation fails
+        try {
+            const data = await spotifyApi.refreshAccessToken();
+            spotifyApi.setAccessToken(data.body['access_token']);
+            // Test again after refresh
+            await spotifyApi.getMe();
+        } catch (refreshError) {
+            isConnecting = false;
+            UIManager.showNotification('Authentication expired. Please restart the app.', 5000);
+            UIManager.render();
+            return;
+        }
+    }
+
+    UIManager.showNotification(`${action === 'create' ? 'Creating room' : 'Joining room'}...`, 30000);
+    UIManager.render();
+
+    // Set connection timeout with better error handling
+    connectionTimeout = setTimeout(() => {
+        if (ws) {
+            ws.terminate();
+        }
+        isConnecting = false;
+        UIManager.showNotification('Connection timed out. Server may be unavailable.', 5000);
+        UIManager.render();
+    }, 10000);
+
+    try {
+        ws = new WebSocket(fullAddress);
+
+        ws.on('open', () => {
+            if (connectionTimeout) {
+                clearTimeout(connectionTimeout);
+                connectionTimeout = null;
+            }
+            
+            try {
+                const token = spotifyApi.getAccessToken();
+                if (!token) {
+                    handleConnectionError('Authentication token is missing. Please restart the app.');
+                    return;
+                }
+                
+                const type = action === 'create' ? 'create-room' : 'join-room';
+                const payload = { accessToken: token };
+                
+                ws!.send(JSON.stringify({ type, payload }));
+            } catch (error) {
+                handleConnectionError('Failed to send connection message');
+            }
+        });
+
+        ws.on('message', (data: any) => {
+            try {
+                const message: WebSocketMessage = JSON.parse(data.toString());
+                handleWebSocketMessage(message);
+            } catch (error) {
+                handleConnectionError('Invalid message received from server');
+            }
+        });
+
+        ws.on('close', (code, reason) => {
+            handleConnectionClose(code, reason?.toString());
+        });
+
+        ws.on('error', (err) => {
+            handleConnectionError(`Connection failed: ${err.message}`);
+        });
+
+    } catch (error) {
+        isConnecting = false;
+        if (connectionTimeout) {
+            clearTimeout(connectionTimeout);
+            connectionTimeout = null;
+        }
+        UIManager.showNotification('Failed to create connection. Please try again.', 5000);
+        UIManager.render();
+    }
+}
+
+function handleWebSocketMessage(message: WebSocketMessage) {
+    switch (message.type) {
+        case 'room-created':
+            isConnecting = false;
+            isHost = true;
+            currentMode = 'in-room';
+            UIManager.setRoom(message.payload.roomId);
+            UIManager.setMode('in-room');
+            startHostPolling();
+            UIManager.showNotification(`Room ${message.payload.roomId} created! Share this ID with friends.`, 6000);
+            break;
+            
+        case 'joined-room':
+            isConnecting = false;
+            isHost = false;
+            currentMode = 'in-room';
+            UIManager.setRoom(message.payload.roomId);
+            UIManager.setMode('in-room');
+            UIManager.showNotification(`Successfully joined room ${message.payload.roomId}!`, 4000);
+            break;
+            
+        case 'room-state-update':
+            UIManager.setRoomState(message.payload);
+            break;
+            
+        case 'force-sync':
+            if (!isHost) {
+                syncToHostPlayback(message.payload);
+            }
+            break;
+            
+        case 'error':
+            isConnecting = false;
+            UIManager.showNotification(`${message.payload.message}`, 5000);
+            leaveRoom();
+            break;
+    }
+    UIManager.render();
+}
+
+function handleConnectionError(errorMessage: string) {
+    isConnecting = false;
+    if (connectionTimeout) {
+        clearTimeout(connectionTimeout);
+        connectionTimeout = null;
+    }
+    cleanup();
+    currentMode = 'menu';
+    UIManager.setMode('menu');
+    UIManager.showNotification(errorMessage, 5000);
+    UIManager.render();
+}
+
+function handleConnectionClose(code: number, reason?: string) {
+    isConnecting = false;
+    if (connectionTimeout) {
+        clearTimeout(connectionTimeout);
+        connectionTimeout = null;
+    }
+    
+    // Don't process if we're already in menu mode (user initiated leave)
+    if (currentMode === 'menu') {
+        return;
+    }
+    
+    cleanup();
+    currentMode = 'menu';
+    UIManager.setMode('menu');
+    
+    // Only show message for unexpected disconnections
+    if (code !== 1000) {
+        UIManager.showNotification('Connection lost. Returned to main menu.', 4000);
+    }
+    
+    UIManager.render();
+}
+
+async function syncToHostPlayback(state: PlaybackStatePayload) {
+    try {
+        UIManager.setPlaybackState(state);
+        if (state.isPlaying) {
+            await spotifyApi.play({ 
+                uris: [state.trackUri], 
+                position_ms: state.positionMs 
+            });
+        } else {
+            await spotifyApi.pause();
+        }
+    } catch (error) {
+        // Handle token refresh if needed
+        if (error instanceof Error && error.message.includes('401')) {
+            try {
+                const data = await spotifyApi.refreshAccessToken();
+                spotifyApi.setAccessToken(data.body['access_token']);
+                // Retry the sync after token refresh
+                if (state.isPlaying) {
+                    await spotifyApi.play({ 
+                        uris: [state.trackUri], 
+                        position_ms: state.positionMs 
+                    });
+                } else {
+                    await spotifyApi.pause();
+                }
+            } catch (refreshError) {
+                // Silently handle if refresh fails
+            }
+        }
+    }
+}
+
+function leaveRoom() {
+    // Immediately clean up and return to menu
+    cleanup();
+    currentMode = 'menu';
+    UIManager.setMode('menu');
+    UIManager.showNotification('Left room.', 2000);
+    UIManager.render();
+    
+    // Close WebSocket after UI update for faster response
+    if (ws) {
+        ws.close(1000, 'User left room');
+    }
+}
+
+function cleanup() {
+    if (ws) {
+        ws.terminate();
+        ws = null;
+    }
+    if (hostPollingInterval) {
+        clearInterval(hostPollingInterval);
+        hostPollingInterval = null;
+    }
+    if (connectionTimeout) {
+        clearTimeout(connectionTimeout);
+        connectionTimeout = null;
+    }
+    isHost = false;
+    isConnecting = false;
+}
+
+// Improved room ID prompting with better state management
+function promptForRoomId(): Promise<string | null> {
+    return new Promise((resolve) => {
+        // Set prompt mode to prevent keypress interference
+        currentMode = 'prompt';
+        UIManager.setMode('prompt');
+        
+        // Temporarily disable raw mode for readline
+        if (process.stdin.isTTY) {
+            process.stdin.setRawMode(false);
+        }
+        
+        // Clear the screen and show clean prompt
+        process.stdout.write('\x1B[2J\x1B[0f'); // Clear screen and move cursor to top
+        console.log(chalk.bold.magenta('🎵 ListenAlong') + chalk.gray(' - Join Room'));
+        console.log('');
+        
+        // Create a new readline interface to avoid input contamination
+        const promptRl = readline.createInterface({
+            input: process.stdin,
+            output: process.stdout
+        });
+        
+        promptRl.question(chalk.cyanBright('Enter Room ID to join (or press Enter to cancel): '), (input) => {
+            promptRl.close();
+            
+            // Restore raw mode
+            if (process.stdin.isTTY) {
+                process.stdin.setRawMode(true);
+            }
+            
+            // Return to menu mode
+            currentMode = 'menu';
+            UIManager.setMode('menu');
+            
+            const roomId = input ? input.trim().toUpperCase() : null;
+            
+            if (!roomId) {
+                UIManager.showNotification('Join cancelled.', 2000);
+            }
+            
+            resolve(roomId);
+        });
+    });
+}
+
+const startHostPolling = () => {
+    if (hostPollingInterval) {
+        clearInterval(hostPollingInterval);
+    }
+    
+    let lastStateHash = '';
+    let consecutiveErrors = 0;
+    let pollCount = 0;
+    
+    hostPollingInterval = setInterval(async () => {
+        // Stop polling if no longer host, not connected, or not in room mode
+        if (!isHost || !ws || ws.readyState !== WebSocket.OPEN || currentMode !== 'in-room') {
+            if (hostPollingInterval) {
+                clearInterval(hostPollingInterval);
+                hostPollingInterval = null;
+            }
+            return;
+        }
+        
+        try {
+            pollCount++;
+            const state = await spotifyApi.getMyCurrentPlaybackState();
+            let currentState: PlaybackStatePayload | null = null;
+            
+            if (state.body && state.body.item && 'artists' in state.body.item) {
+                currentState = {
+                    trackName: state.body.item.name,
+                    artistName: state.body.item.artists.map((a: any) => a.name).join(', '),
+                    trackUri: state.body.item.uri,
+                    durationMs: state.body.item.duration_ms,
+                    positionMs: state.body.progress_ms || 0,
+                    isPlaying: state.body.is_playing,
+                    timestamp: Date.now(),
+                };
+            } else {
+                // Handle paused/stopped state - keep the last known track info
+                const lastState = UIManager.getPlaybackState();
+                if (lastState) {
+                    currentState = { ...lastState, isPlaying: false, timestamp: Date.now() };
+                }
+            }
+            
+            // Always update UI state, even if hash is the same (for progress bar)
+            if (currentState) {
+                UIManager.setPlaybackState(currentState);
+            }
+            
+            // Only send to server if state significantly changed (every 5 seconds or track/play state change)
+            const stateHash = currentState ? 
+                `${currentState.trackUri}-${currentState.isPlaying}-${Math.floor(currentState.positionMs / 5000)}` : 
+                'null';
+                
+            if (stateHash !== lastStateHash) {
+                lastStateHash = stateHash;
+                
+                // Send state to server if WebSocket is still open
+                if (ws && ws.readyState === WebSocket.OPEN && currentState) {
+                    try {
+                        const message = { 
+                            type: 'playback-state-update', 
+                            payload: {
+                                ...currentState,
+                                accessToken: spotifyApi.getAccessToken()
+                            }
+                        };
+                        ws.send(JSON.stringify(message));
+                    } catch (sendError) {
+                        // WebSocket might be closed, ignore
+                    }
+                }
+            }
+            
+            // Render every time for smooth progress bar updates
+            if (currentMode === 'in-room') {
+                UIManager.render();
+            }
+            
+            consecutiveErrors = 0; // Reset error counter on success
+            
+        } catch (error) {
+            consecutiveErrors++;
+            
+            // Only handle auth errors, ignore other temporary errors
+            if (error instanceof Error && error.message.includes('401')) {
+                try {
+                    const data = await spotifyApi.refreshAccessToken();
+                    const newToken = data.body['access_token'];
+                    if (newToken) {
+                        spotifyApi.setAccessToken(newToken);
+                        consecutiveErrors = 0;
+                    } else {
+                        consecutiveErrors++;
+                    }
+                } catch (refreshError) {
+                    consecutiveErrors++;
+                    if (consecutiveErrors > 3) {
+                        UIManager.showNotification('Authentication expired. Please restart.', 5000);
+                        leaveRoom();
+                    }
+                }
+            }
+            
+            // If too many consecutive errors, something is wrong
+            if (consecutiveErrors > 10) {
+                UIManager.showNotification('Connection issues. Please restart.', 5000);
+                leaveRoom();
+            }
+        }
+    }, 2000); // 2 second intervals for stability
+};
+
+async function main() {
+    try {
+        // We no longer need the canary, but we'll leave it for now
+        console.log('--- EXECUTING LISTENALONG VERSION 1.2.7 ---'); 
+        
+        // getAuthenticatedApi already prints the welcome message
+        spotifyApi = await getAuthenticatedApi();
+        
+        // This call was redundant, getAuthenticatedApi already confirms the user.
+        // We can get the user info directly from the already-authenticated object.
+        const me = await spotifyApi.getMe();
+        UIManager.setMe({ id: me.body.id, username: me.body.display_name || 'User' });
+
+        readline.emitKeypressEvents(process.stdin);
+        if (process.stdin.isTTY) {
+            process.stdin.setRawMode(true);
+        }
+
+        process.stdin.on('keypress', keypressHandler);
+
+        process.on('exit', () => {
+            cleanup();
+            console.log(`\n\n${chalk.bold.magenta('Happy Listening!')}\n`);
+            process.stdout.write('\x1B[?25h');
+        });
+
+        const gracefulShutdown = () => {
+            cleanup();
+            process.exit();
+        };
+
+        process.on('SIGINT', gracefulShutdown);
+        process.on('SIGTERM', gracefulShutdown);
+
+        UIManager.render();
+
+    } catch (error) {
+        // --- THIS IS THE NEW, ROBUST CATCH BLOCK ---
+        console.error(chalk.red('\n🛑 Application failed to start:'));
+        
+        // This will now handle ANY type of error object
+        if (error instanceof Error) {
+            console.error(chalk.yellow(error.message));
+            if (error.stack) {
+                console.error(chalk.gray(error.stack));
+            }
+        } else {
+            // If it's not a standard Error object, stringify it
+            console.error(chalk.yellow(JSON.stringify(error, null, 2)));
+        }
+        process.exit(1);
+    }
+}
+
+main();
+</file>
+
+<file path="src/DurableObjectRoom.ts">
+import { WebSocketMessage, RoomStatePayload } from './types';
+
+// NOTE: All "spotify-web-api-node" imports are GONE.
+
+// (Keep the Cloudflare Workers type declarations as they were)
+declare global {
+    interface DurableObjectState {
+        acceptWebSocket(ws: WebSocket): void;
+        storage: DurableObjectStorage;
+    }
+    interface DurableObjectStorage {
+        get<T>(key: string): Promise<T | undefined>;
+        put<T>(key: string, value: T): Promise<void>;
+        delete(key: string): Promise<boolean>;
+    }
+    interface DurableObjectNamespace { idFromName(name: string): DurableObjectId; get(id: DurableObjectId): DurableObjectStub; }
+    interface DurableObjectId { toString(): string; }
+    interface DurableObjectStub { fetch(request: Request): Promise<Response>; }
+    interface WebSocketPair { [0]: WebSocket; [1]: WebSocket; }
+    var WebSocketPair: { new(): WebSocketPair; };
+}
+
+interface Client {
+    id: string; // Spotify User ID
+    username: string;
+    socket: WebSocket;
+}
+
+export interface Env {
+    ROOM: DurableObjectNamespace;
+}
+
+// A helper function to get user info using native fetch
+async function getSpotifyUser(accessToken: string): Promise<{ id: string, display_name: string }> {
+    const response = await fetch("https://api.spotify.com/v1/me", {
+        headers: {
+            'Authorization': `Bearer ${accessToken}`
+        }
+    });
+    if (!response.ok) {
+        // FIX: Improved error message
+        throw new Error(`Failed to get Spotify user info: ${response.status} ${response.statusText}`);
+    }
+    return await response.json();
+}
+
+
+export class DurableObjectRoom {
+    state: DurableObjectState;
+    env: Env;
+    clients: Map<WebSocket, Client>;
+    roomId: string;
+
+    constructor(state: DurableObjectState, env: Env) {
+        this.state = state;
+        this.env = env;
+        this.clients = new Map();
+        this.roomId = "";
+    }
+
+    broadcast(message: WebSocketMessage, exclude?: WebSocket) {
+        const messageString = JSON.stringify(message);
+        this.clients.forEach((client, ws) => {
+            if (ws !== exclude) {
+                ws.send(messageString);
+            }
+        });
+    }
+
+    // Broadcasts the current room state (member list, host)
+    async broadcastRoomState() {
+        const hostId = await this.state.storage.get<string>("hostId");
+        const payload: RoomStatePayload = {
+            hostId: hostId || '',
+            members: Array.from(this.clients.values()).map(c => ({ id: c.id, username: c.username })),
+        };
+        this.broadcast({ type: 'room-state-update', payload });
+    }
+
+    async fetch(request: Request) {
+        // A Durable Object's name is how we identify it. We'll use the room ID.
+        const url = new URL(request.url);
+        // Parse the room ID from the URL path set by index.ts (/room/connect/ROOMID)
+        const pathSegments = url.pathname.split('/').filter(Boolean);
+        this.roomId = pathSegments[2]; // Should be the room ID from /room/connect/ROOMID 
+
+        // Upgrade the connection to a WebSocket
+        const upgradeHeader = request.headers.get('Upgrade');
+        if (!upgradeHeader || upgradeHeader !== 'websocket') {
+            return new Response('Expected WebSocket upgrade', { status: 426 });
+        }
+
+        const pair = new WebSocketPair();
+        const [client, server] = [pair[0], pair[1]];
+        
+        this.state.acceptWebSocket(server);
+
+        return new Response(null, {
+            status: 101,
+            webSocket: client
+        } as any);
+    }
+    // --- WebSocket Event Handlers for THIS room ---
+    async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
+        try {
+            const msg: WebSocketMessage = JSON.parse(message as string);
+            
+            // Validate message structure
+            if (!msg.type || !msg.payload) {
+                ws.send(JSON.stringify({ type: 'error', payload: { message: 'Invalid message format' }}));
+                return;
+            }
+            
+            // Validate access token is present
+            if (!msg.payload.accessToken) {
+                ws.send(JSON.stringify({ type: 'error', payload: { message: 'No access token provided' }}));
+                return;
+            }
+
+            const hostId = await this.state.storage.get<string>("hostId");
+            
+            // Get user info from Spotify
+            let me;
+            try {
+                me = await getSpotifyUser(msg.payload.accessToken);
+            } catch (error) {
+                let errorMsg = 'Invalid Spotify access token';
+                if (error instanceof Error) {
+                    errorMsg = `Spotify API error: ${error.message}`;
+                }
+                ws.send(JSON.stringify({ type: 'error', payload: { message: errorMsg }}));
+                ws.close();
+                return;
+            }
+            
+            const clientInfo: Client = { 
+                id: me.id, 
+                username: me.display_name || me.id, 
+                socket: ws 
+            };
+
+            switch (msg.type) {
+                case 'create-room':
+                    // Check if room already has a host
+                    if (hostId) {
+                        ws.send(JSON.stringify({ 
+                            type: 'error', 
+                            payload: { message: `Room ${this.roomId} already exists with a different host.` }
+                        }));
+                        ws.close();
+                        return;
+                    }
+                    
+                    // Check room capacity (max 10 members)
+                    if (this.clients.size >= 10) {
+                        ws.send(JSON.stringify({ 
+                            type: 'error', 
+                            payload: { message: 'Room is full (maximum 10 members).' }
+                        }));
+                        ws.close();
+                        return;
+                    }
+                    
+                    // Set this user as the host
+                    await this.state.storage.put("hostId", clientInfo.id);
+                    this.clients.set(ws, clientInfo);
+                    
+                    ws.send(JSON.stringify({ 
+                        type: 'room-created', 
+                        payload: { roomId: this.roomId } 
+                    }));
+                    
+                    await this.broadcastRoomState();
+                    break;
+                
+                case 'join-room':
+                    // Check if room exists (has a host)
+                    if (!hostId) {
+                        ws.send(JSON.stringify({ 
+                            type: 'error', 
+                            payload: { message: `Room ${this.roomId} does not exist or has no host.` }
+                        }));
+                        ws.close();
+                        return;
+                    }
+                    
+                    // Check room capacity
+                    if (this.clients.size >= 10) {
+                        ws.send(JSON.stringify({ 
+                            type: 'error', 
+                            payload: { message: 'Room is full (maximum 10 members).' }
+                        }));
+                        ws.close();
+                        return;
+                    }
+                    
+                    // Check if user is already in the room
+                    const existingClient = Array.from(this.clients.values()).find(c => c.id === clientInfo.id);
+                    if (existingClient) {
+                        // Remove the old connection
+                        const oldWs = Array.from(this.clients.entries()).find(([_, c]) => c.id === clientInfo.id)?.[0];
+                        if (oldWs) {
+                            this.clients.delete(oldWs);
+                            oldWs.close();
+                        }
+                    }
+                    
+                    this.clients.set(ws, clientInfo);
+                    
+                    ws.send(JSON.stringify({ 
+                        type: 'joined-room', 
+                        payload: { roomId: this.roomId } 
+                    }));
+                    
+                    await this.broadcastRoomState();
+                    break;
+
+                case 'playback-state-update':
+                    const currentClient = this.clients.get(ws);
+                    
+                    // Only allow host to update playback state
+                    if (currentClient && currentClient.id === hostId) {
+                        // Validate playback state payload
+                        const state = msg.payload;
+                        if (state && typeof state.isPlaying === 'boolean' && state.timestamp) {
+                            // Remove accessToken from the state before broadcasting
+                            const { accessToken, ...playbackState } = state;
+                            this.broadcast({ type: 'force-sync', payload: playbackState }, ws);
+                        }
+                    } else {
+                        ws.send(JSON.stringify({ 
+                            type: 'error', 
+                            payload: { message: 'Only the host can update playback state.' }
+                        }));
+                    }
+                    break;
+
+                default:
+                    ws.send(JSON.stringify({ 
+                        type: 'error', 
+                        payload: { message: `Unknown message type: ${msg.type}` }
+                    }));
+            }
+        } catch (error) {
+            let errorMessage = "An internal server error occurred.";
+            if (error instanceof Error) {
+                errorMessage = error.message;
+            }
+            
+            try {
+                ws.send(JSON.stringify({ type: 'error', payload: { message: errorMessage }}));
+            } catch (sendError) {
+                // Failed to send error message
+            }
+            
+            ws.close();
+        }
+    }
+
+    async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
+        const client = this.clients.get(ws);
+        if (client) {
+            this.clients.delete(ws);
+            
+            // If the host left, clean up the room
+            const hostId = await this.state.storage.get<string>("hostId");
+            if (client.id === hostId) {
+                // Host left - clean up the room
+                await this.state.storage.delete("hostId");
+                
+                // Notify all remaining clients that the room is closing
+                this.broadcast({ 
+                    type: 'error', 
+                    payload: { message: 'Host left the room. Room is now closed.' }
+                });
+                
+                // Close all remaining connections
+                this.clients.forEach((_, clientWs) => {
+                    clientWs.close();
+                });
+                this.clients.clear();
+            } else {
+                // Regular member left - just update room state
+                await this.broadcastRoomState();
+            }
+        }
+    }
+    
+    async webSocketError(ws: WebSocket, error: Error) {
+        const client = this.clients.get(ws);
+        if (client) {
+            this.clients.delete(ws);
+            
+            // Check if it was the host and handle accordingly
+            const hostId = await this.state.storage.get<string>("hostId");
+            if (client.id === hostId) {
+                await this.state.storage.delete("hostId");
+                this.broadcast({ 
+                    type: 'error', 
+                    payload: { message: 'Host connection lost. Room is now closed.' }
+                });
+                this.clients.forEach((_, clientWs) => {
+                    clientWs.close();
+                });
+                this.clients.clear();
+            } else {
+                await this.broadcastRoomState();
+            }
+        }
+    }
+}
+</file>
+
+<file path="src/index.ts">
+import { DurableObjectRoom, Env } from './DurableObjectRoom';
+
+// Cloudflare Workers types
+declare global {
+    interface ExecutionContext {
+        waitUntil(promise: Promise<any>): void;
+        passThroughOnException(): void;
+    }
+}
+
+// This is the stateless "front door" worker.
+export default {
+    async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+        const url = new URL(request.url);
+        const path = url.pathname;
+
+        // We'll use URLs like /room/create or /room/join/<id>
+        const pathSegments = path.split('/').filter(Boolean);
+
+        if (pathSegments.length < 2 || pathSegments[0] !== 'room') {
+            return new Response('Invalid request. Use /room/create or /room/join/<roomId>', { status: 400 });
+        }
+
+        let roomId: string;
+        const action = pathSegments[1];
+
+        // Handle creating a new room
+        if (action === 'create') {
+            roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
+        } else if (action === 'join' && pathSegments[2]) {
+            roomId = pathSegments[2].toUpperCase();
+        } else {
+            return new Response('Invalid request path. Use /room/create or /room/join/<roomId>', { status: 400 });
+        }
+
+        // This is the core logic. Get a "stub" for the Durable Object.
+        // Cloudflare ensures that all requests for the SAME roomId go to the SAME object instance.
+        const doId = env.ROOM.idFromName(roomId);
+        const roomObject = env.ROOM.get(doId);
+
+        // FIX: The original code did not correctly forward the request.
+        // We create a new URL that includes the room ID for the DO to read and pass it in a new Request object.
+        // This ensures the Durable Object knows its own ID and can distinguish between create/join actions.
+        const newUrl = new URL(request.url);
+        newUrl.pathname = `/room/connect/${roomId}`;
+        
+        // Forward the user's request to the correct Durable Object instance
+        return roomObject.fetch(new Request(newUrl, request));
+    }
+};
+
+// Re-export the DO class so wrangler can find it from the main entrypoint
+export { DurableObjectRoom };
+</file>
+
+<file path="src/tokenManager.ts">
+import fs from 'fs-extra';
+import path from 'path';
+import envPaths from 'env-paths';
+import SpotifyWebApi from 'spotify-web-api-node';
+import open from 'open';
+import chalk from 'chalk';
+import { randomUUID } from 'crypto';
+
+// The PUBLIC URL of your deployed authentication service.
+const AUTH_SERVICE_URL = 'https://spot-along-auth.sarthakshitole.workers.dev'; 
+
+interface TokenData {
+    accessToken: string;
+    refreshToken: string;
+    expiresAt: number;
+}
+
+const paths = envPaths('ListenAlong', { suffix: '' });
+const configPath = path.join(paths.config, 'config.json');
+
+// Save tokens to the user's config directory
+async function saveTokens(data: TokenData): Promise<void> {
+    try {
+        await fs.ensureDir(path.dirname(configPath));
+        await fs.writeJson(configPath, data, { spaces: 2 });
+    } catch (error) {
+        // Silently handle save errors, as the app can continue without saving
+    }
+}
+
+// Load tokens from the user's config directory
+async function loadTokens(): Promise<TokenData | null> {
+    try {
+        if (await fs.pathExists(configPath)) {
+            const data = await fs.readJson(configPath);
+            if (data && data.accessToken && data.refreshToken) {
+                return data as TokenData;
+            }
+        }
+        return null;
+    } catch (error) {
+        // If config file is corrupted, delete it and force re-auth
+        await resetConfig();
+        return null;
+    }
+}
+
+// Get an authenticated Spotify API instance
+export async function getAuthenticatedApi(): Promise<SpotifyWebApi> {
+    // The API object no longer needs credentials. This is correct.
+    const spotifyApi = new SpotifyWebApi();
+    const savedTokens = await loadTokens();
+
+    if (savedTokens) {
+        try {
+            console.log(chalk.gray('🔄 Verifying saved session...'));
+
+            // THIS IS THE NEW LOGIC: Ask OUR server to refresh the token.
+            const response = await fetch(`${AUTH_SERVICE_URL}/refresh`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refresh_token: savedTokens.refreshToken })
+            });
+
+            if (!response.ok) {
+                // If our server says the refresh failed, the token is truly invalid.
+                throw new Error('Could not refresh session.');
+            }
+            
+            const newTokens = await response.json();
+            const newAccessToken = newTokens.access_token;
+            // Spotify might issue a new refresh token, so we save that too if it exists.
+            const newRefreshToken = newTokens.refresh_token || savedTokens.refreshToken;
+
+            spotifyApi.setAccessToken(newAccessToken);
+            spotifyApi.setRefreshToken(newRefreshToken);
+
+            // Now, confirm the refreshed token works
+            const { body: me } = await spotifyApi.getMe();
+            
+            await saveTokens({
+                accessToken: newAccessToken,
+                refreshToken: newRefreshToken,
+                expiresAt: Date.now() + (newTokens.expires_in * 1000),
+            });
+            
+            console.log(chalk.green(`✅ Welcome back, ${me.display_name || me.id}!`));
+
+            if (me.product !== 'premium') {
+                await resetConfig();
+                throw new Error('This application requires a Spotify Premium account.');
+            }
+            return spotifyApi;
+            
+        } catch (error) {
+            console.log(chalk.yellow('🔄 Saved session is invalid. Starting fresh authentication.'));
+            await resetConfig();
+        }
+    }
+
+    // This block for fresh authentication remains the same and is correct.
+    console.log(chalk.cyan('🔐 First time setup - Spotify authentication required.'));
+    
+    try {
+        const tokenData = await performAutomatedAuthentication();
+        
+        spotifyApi.setAccessToken(tokenData.accessToken);
+        spotifyApi.setRefreshToken(tokenData.refreshToken);
+
+        const { body: me } = await spotifyApi.getMe();
+        if (me.product !== 'premium') {
+            await resetConfig();
+            throw new Error('This application requires a Spotify Premium account.');
+        }
+
+        await saveTokens(tokenData);
+        console.log(chalk.green(`✅ Successfully authenticated as ${me.display_name || me.id}!`));
+        return spotifyApi;
+        
+    } catch (authError: any) {
+        await resetConfig();
+        const errorMessage = authError instanceof Error ? authError.message : 'An unknown authentication error occurred.';
+        throw new Error(`Authentication failed: ${errorMessage}`);
+    }
+}
+
+// Handles the browser-based auth flow
+function performAutomatedAuthentication(): Promise<TokenData> {
+    return new Promise(async (resolve, reject) => {
+        const sessionId = randomUUID();
+        const loginUrl = `${AUTH_SERVICE_URL}/login?sessionId=${sessionId}`;
+        const checkUrl = `${AUTH_SERVICE_URL}/check-token?sessionId=${sessionId}`;
+        const pollInterval = 2500;
+        const timeout = 120000; // 2 minutes
+        let isFinalized = false;
+
+        const cleanup = (intervalId: NodeJS.Timeout, timeoutId: NodeJS.Timeout) => {
+            isFinalized = true;
+            clearInterval(intervalId);
+            clearTimeout(timeoutId);
+        };
+
+        const timeoutId = setTimeout(() => {
+            if (isFinalized) return;
+            cleanup(intervalId, timeoutId);
+            reject(new Error('Authentication timed out after 2 minutes. Please try again.'));
+        }, timeout);
+
+        const intervalId = setInterval(async () => {
+            if (isFinalized) return;
+            
+            try {
+                const response = await fetch(checkUrl);
+
+                if (response.ok) { // Status 200-299
+                    const tokens = await response.json();
+                    
+                    if (!tokens.access_token || !tokens.refresh_token) {
+                        throw new Error('Invalid token response from auth service.');
+                    }
+                    
+                    cleanup(intervalId, timeoutId);
+                    
+                    resolve({
+                        accessToken: tokens.access_token,
+                        refreshToken: tokens.refresh_token,
+                        expiresAt: Date.now() + (tokens.expires_in || 3600) * 1000,
+                    });
+
+                } else if (response.status === 404) {
+                    // This is expected. Waiting for user to log in.
+                } else {
+                    const errorText = await response.text().catch(() => 'Server returned an unreadable error.');
+                    throw new Error(`Auth service failed with status ${response.status}: ${errorText}`);
+                }
+            } catch (error) {
+                // --- THIS IS THE FINAL FIX ---
+                // We now create a proper Error object no matter what, so it never becomes [object Object].
+                // This will catch network flakes on the first run.
+                const friendlyError = new Error(`Polling for authentication failed. Please check your network. Original error: ${error instanceof Error ? error.message : 'Unknown'}`);
+                cleanup(intervalId, timeoutId);
+                reject(friendlyError); 
+            }
+        }, pollInterval);
+
+        // This part for opening the browser remains unchanged.
+        try {
+            console.log(chalk.cyan('\n🌐 Opening browser for Spotify authentication...'));
+            console.log(chalk.gray("If the browser doesn't open, please visit this URL:"));
+            console.log(chalk.blue(loginUrl));
+            console.log(chalk.gray('\nWaiting for you to complete authentication in your browser...\n'));
+            await open(loginUrl);
+        } catch (error) {
+            console.log(chalk.yellow('\n⚠️  Could not open browser automatically.'));
+            console.log(chalk.cyan('Please manually open this URL in your browser:'));
+            console.log(chalk.blue(loginUrl));
+            console.log(chalk.gray('\nWaiting for you to complete authentication...\n'));
+        }
+    });
+}
+
+// Gets path to config file (for help screen)
+export function getConfigPath(): string {
+    const paths = envPaths('ListenAlong', { suffix: '' });
+    return path.join(paths.config, 'config.json');
+}
+
+// Deletes the saved token file
+export async function resetConfig(): Promise<void> {
+    const configFilePath = getConfigPath();
+    try {
+        if (await fs.pathExists(configFilePath)) {
+            await fs.remove(configFilePath);
+        }
+    } catch (error) {
+        // This should not fail, but if it does, there's not much we can do
+        console.error('Failed to reset configuration:', error);
+    }
+}
+</file>
+
+<file path="src/types.ts">
+export interface WebSocketMessage {
+  type: string;
+  payload: any;
+}
+
+// We can also define specific payload structures for clarity
+export interface CreateRoomPayload {
+  // No payload needed for creating a room
+}
+
+export interface JoinRoomPayload {
+  roomId: string;
+}
+
+export interface RoomCreatedPayload {
+  roomId: string;
+}
+
+export interface UserJoinedPayload {
+  clientId: string;
+}
+
+export interface ErrorPayload {
+  message: string;
+}
+
+// Now includes all the data we need for a rich UI
+export interface PlaybackStatePayload {
+  trackName: string;
+  artistName: string;
+  trackUri: string;
+  durationMs: number;
+  positionMs: number;
+  isPlaying: boolean;
+  timestamp: number;
+}
+
+// New interface for room state updates
+export interface RoomStatePayload {
+  hostId: string;
+  members: {
+    id: string;
+    username: string;
+  }[];
+}
+</file>
+
+<file path="src/uiManager.ts">
+import chalk from 'chalk';
+import logUpdate from 'log-update';
+import chalkAnimation from 'chalk-animation';
+import { PlaybackStatePayload, RoomStatePayload } from './types';
+import * as TokenManager from './tokenManager';
+
+interface Me {
+    id: string;
+    username: string;
+}
+
+const uiState = {
+    me: null as Me | null,
+    isHost: false,
+    mode: 'menu' as 'menu' | 'in-room' | 'help' | 'prompt', // Add prompt state
+    room: null as string | null,
+    lastPlaybackState: null as PlaybackStatePayload | null,
+    roomState: null as RoomStatePayload | null, // Add new state property
+    notification: null as string | null,
+    notificationTimeout: null as NodeJS.Timeout | null,
+    lastRender: 0,
+};
+
+const titleAnimation = chalkAnimation.karaoke('ListenAlong', 2);
+
+// A helper for creating hyperlinks in modern terminals
+const link = (text: string, url: string) => `\u001b]8;;${url}\u0007${text}\u001b]8;;\u0007`;
+
+function createProgressBar(progress: number, width = 30): string {
+  const filled = Math.round(progress * width);
+  const empty = width - filled;
+  return `[${chalk.green('━'.repeat(filled))}${chalk.gray('━'.repeat(empty))}]`;
+}
+
+function formatDuration(ms: number): string {
+    if (isNaN(ms) || ms < 0) return '00:00';
+    const totalSeconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+}
+
+// The main render loop using log-update for flicker-free UI
+export function render() {
+  // Don't render if in prompt mode
+  if (uiState.mode === 'prompt') return;
+  
+  // Throttle renders to prevent flickering (max 10 renders per second)
+  const now = Date.now();
+  if (now - uiState.lastRender < 100) return;
+  uiState.lastRender = now;
+  
+  process.stdout.write('\x1B[?25l'); // Hide cursor
+  
+  let mainContent = '';
+  if (uiState.mode === 'menu') mainContent = drawMenu();
+  else if (uiState.mode === 'in-room') mainContent = drawInRoomUI();
+  else if (uiState.mode === 'help') mainContent = drawHelpScreen();
+
+  const header = `${chalk.bold.magenta('🎵 ListenAlong')} - Welcome, ${chalk.cyan(uiState.me?.username || 'User')}\n`;
+  const footer = `\n${chalk.gray('──────────────────────────────────')}\nMade with ${chalk.red('♥')} by ${chalk.cyan('Sarthak')} (x.com/Sarthakhuh)`;
+  let notificationLine = '';
+  if (uiState.notification) {
+      notificationLine = `\n\n${chalk.yellow('⚡')} ${chalk.yellow(uiState.notification)}`;
+  }
+
+  const fullContent = `${header}${mainContent}${notificationLine}${footer}`;
+  
+  // Use logUpdate for flicker-free rendering
+  logUpdate(fullContent);
+}
+
+function drawMenu(): string {
+  let content = `\n${chalk.bold('Main Menu')}\n\n`;
+  content += `  ${chalk.cyanBright.bold('[c]')} - Create a new listening room\n`;
+  content += `  ${chalk.cyanBright.bold('[j]')} - Join an existing room\n`;
+  content += `  ${chalk.cyanBright.bold('[h]')} - Help & Settings\n\n`;
+  content += `  ${chalk.cyanBright.bold('[q]')} - Quit\n\n`;
+  content += `${chalk.gray('💡 Tip: Make sure Spotify is open and playing music before creating a room!')}`;
+  return content;
+}
+
+function drawInRoomUI(): string {
+  const playbackState = uiState.lastPlaybackState;
+  const roomState = uiState.roomState;
+  const isHost = roomState?.hostId === uiState.me?.id;
+
+  let content = `${chalk.bold('› In Room:')} ${chalk.greenBright(uiState.room)}\n`;
+  
+  if (isHost) {
+    content += `${chalk.yellow('👑 You are the host')} - Control music with your Spotify app\n\n`;
+  } else {
+    content += `${chalk.cyan('🎧 Listening along')} - Music will sync automatically\n\n`;
+  }
+
+  if (!playbackState || !playbackState.trackName) {
+    if (isHost) {
+      content += `${chalk.yellow('⏸️  No music playing')} - Start playing music in your Spotify app to begin the session\n`;
+    } else {
+      content += `${chalk.gray('⏸️  Waiting for host to start music...')}\n`;
+    }
+  } else {
+    const progressPercent = Math.max(0, Math.min(1, playbackState.positionMs / playbackState.durationMs));
+    const progressBar = createProgressBar(progressPercent);
+    const statusIcon = playbackState.isPlaying ? '▶️' : '⏸️';
+    
+    content += `  ${statusIcon} ${chalk.bold.white(playbackState.trackName)}\n`;
+    content += `     ${chalk.cyan(playbackState.artistName)}\n\n`;
+    content += `     ${progressBar} ${formatDuration(playbackState.positionMs)} / ${formatDuration(playbackState.durationMs)}\n`;
+  }
+
+  content += `\n${chalk.bold('Members in Room:')} ${roomState?.members?.length || 0}/10\n`;
+  if (roomState && roomState.members) {
+    roomState.members.forEach(member => {
+        const isYou = member.id === uiState.me?.id ? chalk.gray(' (you)') : '';
+        if (member.id === roomState.hostId) {
+          content += `   ${chalk.yellow('👑')} ${chalk.bold(member.username)} ${chalk.yellow('(Host)')}${isYou}\n`;
+        } else {
+          content += `   ${chalk.gray('🎧')} ${member.username}${isYou}\n`;
+        }
+    });
+  } else {
+    content += `   ${chalk.gray('Loading member list...')}\n`;
+  }
+
+  content += `\n${chalk.gray('Press [q] to leave the room')}`;
+  return content;
+}
+
+function drawHelpScreen(): string {
+    const configPath = TokenManager.getConfigPath();
+    let content = `${chalk.bold.yellow('⚙️ Help & Settings')}\n\n`;
+    content += `Your Spotify authentication tokens are stored at:\n`;
+    content += `${chalk.cyan(configPath)}\n\n`;
+    content += `If you have issues, you can reset the application by deleting this file.\n\n`;
+    content += `  ${chalk.redBright.bold('[r]')} - Reset Configuration (deletes the file)\n`;
+    content += `  ${chalk.cyanBright.bold('[b]')} - Back to Main Menu\n`;
+    return content;
+}
+
+// --- UI State Updaters ---
+export function setMe(me: Me) { uiState.me = me; }
+export function getMe(): Me | null { return uiState.me; }
+export function setIsHost(isHost: boolean) { uiState.isHost = isHost; }
+export function setMode(mode: 'menu' | 'in-room' | 'help' | 'prompt') { uiState.mode = mode; }
+export function setRoom(roomId: string) { uiState.room = roomId; }
+export function getPlaybackState() { return uiState.lastPlaybackState; }
+export function setPlaybackState(state: PlaybackStatePayload | null) { uiState.lastPlaybackState = state; }
+export function setRoomState(state: RoomStatePayload) { uiState.roomState = state; }
+
+export function showNotification(message: string, duration = 3000) {
+    if (uiState.notificationTimeout) clearTimeout(uiState.notificationTimeout);
+    uiState.notification = message;
+    
+    if (duration > 0) {
+        uiState.notificationTimeout = setTimeout(() => {
+            uiState.notification = null;
+            render();
+        }, duration);
+    }
+    
+    render();
+}
+</file>
+
 <file path=".gitignore">
 node_modules
 .env
 </file>
 
+<file path="DEPLOYMENT.md">
+# Deployment Guide for ListenAlong
+
+This guide will help you deploy both the main server and authentication service to Cloudflare Workers.
+
+## Prerequisites
+
+1. **Cloudflare Account**: Sign up at [cloudflare.com](https://cloudflare.com)
+2. **Wrangler CLI**: Install with `npm install -g wrangler`
+3. **Spotify Developer Account**: Create at [developer.spotify.com](https://developer.spotify.com)
+
+## Step 1: Spotify App Setup
+
+1. Go to [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+2. Click "Create App"
+3. Fill in the details:
+   - **App name**: `ListenAlong Auth`
+   - **App description**: `Authentication service for ListenAlong CLI`
+   - **Website**: `https://your-domain.com` (can be any valid URL)
+   - **Redirect URI**: `https://your-auth-service.your-subdomain.workers.dev/callback`
+4. Save the **Client ID** and **Client Secret**
+
+## Step 2: Deploy Main Server
+
+The main server handles WebSocket connections and room management.
+
+```bash
+# In the root directory
+npm install
+npm run deploy
+```
+
+This will deploy to `spot-along-server.your-subdomain.workers.dev`
+
+## Step 3: Deploy Authentication Service
+
+### 3.1 Create KV Namespace
+
+The authentication service needs a KV namespace to temporarily store tokens during the OAuth flow.
+
+```bash
+# Navigate to auth-server directory
+cd auth-server
+
+# Create the main KV namespace
+npx wrangler kv:namespace create TOKEN_STORE
+
+# Create the preview KV namespace (for development)
+npx wrangler kv:namespace create TOKEN_STORE --preview
+```
+
+You'll see output like this:
+```
+🌀 Creating namespace with title "spot-along-auth-TOKEN_STORE"
+✨ Success!
+Add the following to your configuration file:
+id = "abc123def456ghi789jkl012mno345pqr678stu901vwx234yz"
+```
+
+### 3.2 Update Configuration
+
+Edit `auth-server/wrangler.toml` and replace the placeholder IDs:
+
+```toml
+[[kv_namespaces]]
+binding = "TOKEN_STORE"
+id = "abc123def456ghi789jkl012mno345pqr678stu901vwx234yz"  # Your main namespace ID
+preview_id = "def456ghi789jkl012mno345pqr678stu901vwx234yzabc123"  # Your preview namespace ID
+```
+
+### 3.3 Set Environment Variables
+
+Set your Spotify credentials as secrets:
+
+```bash
+# Set the main credentials
+npx wrangler secret put SPOTIFY_CLIENT_ID
+# Enter your Spotify Client ID when prompted
+
+npx wrangler secret put SPOTIFY_CLIENT_SECRET
+# Enter your Spotify Client Secret when prompted
+```
+
+### 3.4 Deploy the Auth Service
+
+```bash
+npm run deploy
+```
+
+This will deploy to `spot-along-auth.your-subdomain.workers.dev`
+
+## Step 4: Update Client Configuration
+
+Update the authentication service URL in `src/tokenManager.ts`:
+
+```typescript
+const AUTH_SERVICE_URL = 'https://spot-along-auth.your-subdomain.workers.dev';
+```
+
+## Step 5: Test the Deployment
+
+1. **Test the main server**:
+   ```bash
+   curl https://spot-along-server.your-subdomain.workers.dev/health
+   ```
+
+2. **Test the auth service**:
+   ```bash
+   curl https://spot-along-auth.your-subdomain.workers.dev/health
+   ```
+
+3. **Test the complete flow**:
+   ```bash
+   npm start
+   ```
+
+## Troubleshooting
+
+### Common Issues
+
+**"KV namespace not found"**
+- Ensure you've created both the main and preview KV namespaces
+- Verify the IDs in `wrangler.toml` are correct
+- Check that you're using the right account (if you have multiple Cloudflare accounts)
+
+**"Authentication failed"**
+- Verify your Spotify app credentials are set correctly
+- Check that the redirect URI matches exactly
+- Ensure the auth service URL is updated in `src/tokenManager.ts`
+
+**"WebSocket connection failed"**
+- Verify the main server is deployed and accessible
+- Check that the server URL in `src/client.ts` is correct
+
+### Debugging
+
+Enable debug logging:
+
+```bash
+# For the main server
+wrangler dev --log-level debug
+
+# For the auth service
+cd auth-server
+wrangler dev --log-level debug
+```
+
+### Environment Variables
+
+You can also set environment variables in the Cloudflare dashboard:
+
+1. Go to Workers & Pages
+2. Select your worker
+3. Go to Settings → Variables
+4. Add your secrets there
+
+## Production Considerations
+
+### Security
+- Use environment variables for all secrets
+- Regularly rotate your Spotify app credentials
+- Monitor your Cloudflare usage
+
+### Performance
+- The free tier includes 100,000 requests/day
+- KV operations count toward your usage
+- Consider upgrading for high-traffic applications
+
+### Monitoring
+- Use Cloudflare Analytics to monitor usage
+- Set up alerts for error rates
+- Monitor KV namespace usage
+
+## Support
+
+If you encounter issues:
+
+1. Check the [troubleshooting section](#troubleshooting)
+2. Review the Cloudflare Workers logs
+3. Verify all environment variables are set
+4. Test with a fresh deployment
+
+For additional help, please open an issue on GitHub.
+</file>
+
+<file path="package.json">
+{
+  "name": "spotalong",
+  "version": "1.0.1",
+  "description": "Real-time Spotify listening parties, right in your terminal.",
+  "main": "dist/client.js",
+  "bin": {
+    "spotalong": "dist/client.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
+    "start": "ts-node src/client.ts",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "spotify",
+    "cli",
+    "terminal",
+    "tui",
+    "music",
+    "listen-along",
+    "party",
+    "sync"
+  ],
+  "author": "Sarthak (https://x.com/Sarthakhuh)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Sarthakischill/spot-along.git"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "chalk-animation": "^1.6.0",
+    "dotenv": "^16.4.5",
+    "env-paths": "^3.0.0",
+    "express": "^4.19.2",
+    "fs-extra": "^11.2.0",
+    "log-update": "^4.0.0",
+    "open": "^8.4.2",
+    "spotify-web-api-node": "^5.0.2",
+    "ws": "^8.17.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240502.0",
+    "@types/chalk-animation": "^1.6.3",
+    "@types/express": "^4.17.21",
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^18.19.33",
+    "@types/spotify-web-api-node": "^5.0.11",
+    "@types/ws": "^8.5.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.3",
+    "wrangler": "^3.63.0"
+  }
+}
+</file>
+
 <file path="README.md">
-# 🎵 Spot-along
+# ListenAlong 🎵
 
-### Real-time Spotify listening parties, right in your terminal.
-
-A command-line tool that lets you create shared, synchronized music sessions with friends, inspired by Discord's "Listen Along" feature. The host controls the music using their regular Spotify app (desktop or mobile), and everyone else's player syncs up in real-time.
-
-
----
+Real-time Spotify listening parties, right in your terminal. Sync your Spotify playback with friends and enjoy music together!
 
 ## ✨ Features
 
-*   **Real-Time Sync:** Music playback is synchronized between the host and all listeners.
-*   **Polished Terminal UI:** A clean, flicker-free interface that shows the current song, artist, and a live progress bar.
-*   **Persistent & Secure Auth:** Log in once! The app securely saves and refreshes your Spotify credentials so you don't have to log in with your browser every time.
-*   **Host & Listener Model:** One person acts as the host, and up to 9 others can join as listeners. The member list shows who's in the room and who's hosting.
-*   **Cross-Platform:** Works on Windows, macOS, and Linux.
-*   **Intuitive Controls:** Simple, single-key navigation for creating rooms and accessing settings.
-*   **Built-in Settings:** An easy-to-use help screen shows you where your configuration is stored and allows for a one-key reset.
+- **Real-time Sync**: Host a room and sync your Spotify playback with friends
+- **Cross-platform**: Works on Windows, macOS, and Linux
+- **Simple Setup**: One-time authentication with Spotify
+- **Beautiful TUI**: Clean, intuitive terminal interface
+- **Premium Required**: Uses Spotify's Premium features for seamless control
 
-## ✅ Prerequisites
+## 🚀 Quick Start
 
-Before you begin, you will need two things:
+### Prerequisites
 
-1.  **Node.js:** You must have Node.js (version 16 or later) installed on your system. You can download it from [nodejs.org](https://nodejs.org/).
-2.  **Spotify Premium Account:** The Spotify Web API requires a **Premium** account to control playback remotely. This tool will not work with a free Spotify account. All users (both host and listeners) must have a Premium subscription.
+- **Spotify Premium Account** (required for playback control)
+- **Node.js 18+** and npm
+- **Cloudflare Account** (for hosting the backend services)
 
-## 🚀 Usage
-
-The easiest way to use Spot-along is with `npx`, which will run the package without needing a permanent installation.
+### Installation
 
 ```bash
-npx spot
+npm install -g listenalong
 ```
 
-The first time you run this, your web browser will open to the Spotify login page. After you approve the permissions, Spot-along will handle the rest. On subsequent runs, it will use your saved tokens and you won't need to log in again.
+### First-Time Setup
+
+1. **Deploy the Backend Services** (see [Deployment Guide](#deployment-guide) below)
+2. **Run the app**: `listenalong`
+3. **Authenticate with Spotify** when prompted
+4. **Create or join a room** and start listening!
+
+## 🛠️ Deployment Guide
+
+### Step 1: Deploy the Main Server
+
+The main server handles WebSocket connections and room management.
+
+```bash
+# In the root directory
+npm run deploy
+```
+
+### Step 2: Deploy the Authentication Service
+
+The authentication service handles Spotify OAuth2 flow.
+
+```bash
+# Navigate to auth-server directory
+cd auth-server
+
+# Create KV namespace for token storage
+npx wrangler kv:namespace create TOKEN_STORE
+npx wrangler kv:namespace create TOKEN_STORE --preview
+
+# Update wrangler.toml with the returned IDs
+# Replace the placeholder IDs in auth-server/wrangler.toml:
+# - id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+# - preview_id = "REPLACE_WITH_YOUR_KV_NAMESPACE_PREVIEW_ID"
+
+# Deploy the auth service
+npm run deploy
+```
+
+### Step 3: Update Configuration
+
+After deployment, update the authentication service URL in `src/tokenManager.ts`:
+
+```typescript
+const AUTH_SERVICE_URL = 'https://your-auth-service.your-subdomain.workers.dev';
+```
+
+## 🎮 Usage
+
+### Creating a Room
+- Press `c` to create a new room
+- Share the room ID with your friends
+- Start playing music on Spotify
+
+### Joining a Room
+- Press `j` to join an existing room
+- Enter the room ID provided by the host
+- Your Spotify will sync to the host's playback
 
 ### Controls
+- `q` - Quit/Leave room
+- `h` - Show help
+- `r` - Reset configuration (in help menu)
 
-Once the application is running, use these single-key commands:
+## 🔧 Troubleshooting
 
-| Key | Action                                       | Availability      |
-|:---:|----------------------------------------------|-------------------|
-| `c` | **Create** a new listening room and become the host. | Main Menu         |
-| `j` | **Join** an existing room using a Room ID.         | Main Menu         |
-| `h` | Open the **Help & Settings** screen.           | Main Menu         |
-| `r` | **Reset** your configuration (deletes saved tokens). | Help & Settings   |
-| `b` | Go **Back** to the Main Menu.                | Help & Settings   |
-| `q` | **Quit** the application.                      | Any Screen        |
+### Common Issues
 
----
+**"Authentication failed: [object Object]"**
+- This was a critical bug that has been fixed in version 1.2.1
+- If you're still experiencing this, try resetting your configuration (`h` → `r`)
 
-## 🛠️ Development Setup
+**"Room doesn't exist" or "Connection failed"**
+- Ensure both backend services are properly deployed
+- Check that the authentication service URL is correct in `src/tokenManager.ts`
 
-Interested in contributing or running the project from the source code? Follow these steps.
+**"Premium account required"**
+- This app requires Spotify Premium for playback control features
+- Free accounts cannot control playback and will not work
 
-### 1. Clone the Repository
-```bash
-git clone https://github.com/Sarthakischill/spot-along.git
-cd spot-along
-```
+### Reset Configuration
 
-### 2. Install Dependencies
-```bash
-npm install
-```
+If you encounter authentication issues:
 
-### 3. Set Up Your Spotify API Credentials
+1. Press `h` for help menu
+2. Press `r` to reset configuration
+3. Restart the app and re-authenticate
 
-You need to register your own application with Spotify to get the necessary API keys.
+## 🏗️ Architecture
 
-1.  Go to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and log in.
-2.  Click **"Create app"**.
-3.  Give it a name (e.g., "Spot-along Dev") and a description.
-4.  Once created, copy your **Client ID** and **Client Secret**.
-5.  Click **"Edit Settings"**.
-6.  In the "Redirect URIs" box, add this exact URL: `http://localhost:8888/callback`
-7.  Click **"Add"** and then **"Save"**.
+- **CLI Client** (`src/client.ts`): Terminal UI and Spotify API integration
+- **Main Server** (`src/index.ts`): WebSocket server and room management
+- **Durable Objects** (`src/DurableObjectRoom.ts`): Stateful room instances
+- **Auth Service** (`auth-server/`): Spotify OAuth2 flow handler
 
-### 4. Create Your Environment File
+## 📝 Recent Fixes (v1.2.1)
 
-In the root of the project, create a file named `.env` and populate it with the credentials you just copied.
+### Critical Authentication Fixes
+- **Fixed "[object Object]" error**: Improved error handling to prevent cryptic error messages
+- **KV Namespace Configuration**: Added proper placeholder IDs that need to be replaced with actual Cloudflare KV Namespace IDs
+- **Better Error Messages**: More descriptive error messages for easier debugging
+- **Token Refresh Logic**: Improved handling of expired access tokens
 
-**.env**
-```
-SPOTIFY_CLIENT_ID=your_client_id_from_the_dashboard
-SPOTIFY_CLIENT_SECRET=your_client_secret_from_the_dashboard
-REDIRECT_URI=http://localhost:8888/callback
-```
+### Code Quality Improvements
+- **Removed Unused Dependencies**: Cleaned up auth-server dependencies
+- **Better Error Handling**: Consistent error handling across all components
+- **Improved Documentation**: Clear deployment instructions and troubleshooting guide
 
-### 5. Running the Application Locally
+## 🤝 Contributing
 
-The project consists of a server (the central message broker) and a client (the terminal UI). You must run both in separate terminals.
-
-*   **In your FIRST terminal, run the server:**
-    ```bash
-    npm run start:server
-    ```
-    Wait for `🚀 WebSocket server started...` to appear.
-
-*   **In your SECOND terminal, run the client:**
-    ```bash
-    npm run start:client
-    ```
-
-## 🏗️ Project Structure
-
-A brief overview of the key files in the project:
-
-*   `src/client.ts`: The main entry point for the user-facing terminal application. It handles keypresses, orchestrates API calls, and manages the main application state.
-*   `src/server.ts`: The WebSocket server that manages rooms, handles user connections, and relays messages between the host and listeners.
-*   `src/uiManager.ts`: The dedicated rendering engine. It's responsible for drawing the entire user interface without flicker, using `log-update`.
-*   `src/tokenManager.ts`: Handles all logic related to Spotify authentication—saving, loading, refreshing, and validating tokens.
-*   `src/types.ts`: Defines shared TypeScript interfaces for messages and data payloads, ensuring type safety between the client and server.
-
----
-
-## ❤️ Author
-
-Made with ♥ by **Sarthak**
-*   **X.com / Twitter:** [x.com/Sarthakhuh](https://x.com/Sarthakhuh)
-*   **GitHub:** [@your-github-username](https://github.com/Sarthakischill)
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Test thoroughly
+5. Submit a pull request
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE)
+MIT License - see [LICENSE](LICENSE) for details.
+
+## 🙏 Acknowledgments
+
+- Spotify Web API for music integration
+- Cloudflare Workers for serverless hosting
+- The open-source community for various dependencies
+
+---
+
+**Happy Listening! 🎵**
 </file>
 
 <file path="tsconfig.json">
@@ -310,1087 +2173,17 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE)
 </file>
 
 <file path="wrangler.toml">
-# This is the configuration file for your Cloudflare Worker.
+name = "spot-along-server"
+main = "src/index.ts"
+compatibility_date = "2024-05-10"
 
-name = "spot-along-server" # The name of your service, will be part of the URL
-main = "src/index.ts"      # The entry point for all initial requests
-compatibility_date = "2024-05-02" # A recent date for modern features
-
-# This section defines our stateful Durable Object.
 [[durable_objects.bindings]]
-name = "ROOM" # This is the name we'll use in code to access the Object
-class_name = "DurableObjectRoom" # The name of the class that defines the Object's logic
+name = "ROOM"
+class_name = "DurableObjectRoom"
 
-# Migrations for Durable Objects
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["DurableObjectRoom"]
-</file>
-
-<file path="src/auth.ts">
-// src/auth.ts
-
-import express from 'express';
-import SpotifyWebApi from 'spotify-web-api-node';
-import dotenv from 'dotenv';
-
-// Load environment variables from .env file
-dotenv.config();
-
-const app = express();
-const port = 8888; // The port we'll run the server on
-
-// These are the permissions we need to request from the user
-const scopes = [
-  'user-read-playback-state',
-  'user-modify-playback-state',
-  'user-read-currently-playing',
-];
-
-// Check if credentials are in the .env file
-if (!process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET || !process.env.REDIRECT_URI) {
-  throw new Error(
-    'Missing Spotify credentials. Please check your .env file.'
-  );
-}
-
-// Create the Spotify API client
-const spotifyApi = new SpotifyWebApi({
-  clientId: process.env.SPOTIFY_CLIENT_ID,
-  clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
-  redirectUri: process.env.REDIRECT_URI,
-});
-
-// The /login route starts the authentication process
-app.get('/login', (req, res) => {
-  // Redirect the user to Spotify's authorization page
-  res.redirect(spotifyApi.createAuthorizeURL(scopes, 'some-state-optional'));
-});
-
-// The /callback route is where Spotify redirects the user back to
-app.get('/callback', async (req, res) => {
-  const error = req.query.error;
-  const code = req.query.code as string;
-
-  if (error) {
-    console.error('Callback Error:', error);
-    res.send(`Callback Error: ${error}`);
-    return;
-  }
-
-  try {
-    // Exchange the authorization code for an access token and refresh token
-    const data = await spotifyApi.authorizationCodeGrant(code);
-    const access_token = data.body['access_token'];
-    const refresh_token = data.body['refresh_token'];
-
-    console.log('Successfully retrieved access token!');
-    console.log('Access Token:', access_token);
-    console.log('Refresh Token:', refresh_token);
-    
-    // For now, we'll just show a success message.
-    // In the future, we will save these tokens.
-    res.send('Success! You can close this tab and return to the terminal.');
-
-    // You can now use the access token to make API calls
-    spotifyApi.setAccessToken(access_token);
-    spotifyApi.setRefreshToken(refresh_token);
-
-  } catch (err) {
-    console.error('Error getting Tokens:', err);
-    res.send(`Error getting tokens: ${err}`);
-  }
-});
-
-app.listen(port, () => {
-  console.log(
-    `Authentication server started. Please open this URL in your browser to log in:`
-  );
-  console.log(`http://localhost:${port}/login`);
-});
-</file>
-
-<file path="src/DurableObjectRoom.ts">
-import { WebSocketMessage, RoomStatePayload } from './types';
-import SpotifyWebApi from 'spotify-web-api-node';
-
-  // Cloudflare Workers types
-  declare global {
-    interface DurableObjectState {
-      acceptWebSocket(ws: WebSocket): void;
-    }
-    
-    interface DurableObjectNamespace {
-      idFromName(name: string): DurableObjectId;
-      get(id: DurableObjectId): DurableObjectStub;
-    }
-    
-    interface DurableObjectId {
-      toString(): string;
-    }
-    
-    interface DurableObjectStub {
-      fetch(request: Request): Promise<Response>;
-    }
-    
-    interface WebSocketPair {
-      [0]: WebSocket;
-      [1]: WebSocket;
-    }
-    
-    var WebSocketPair: {
-      new(): WebSocketPair;
-    };
-  }
-
-// Define the structure of a client connected to THIS room
-interface Client {
-  id: string; // Spotify User ID
-  username: string;
-  socket: WebSocket;
-}
-
-// Define the environment variables the Durable Object can access
-export interface Env {
-  ROOM: DurableObjectNamespace;
-}
-
-// The Durable Object Class for a single Room
-export class DurableObjectRoom {
-  state: DurableObjectState;
-  env: Env;
-  clients: Map<WebSocket, Client>;
-  hostId?: string;
-  roomId: string;
-
-  constructor(state: DurableObjectState, env: Env) {
-    this.state = state;
-    this.env = env;
-    this.clients = new Map();
-    this.roomId = ""; // Will be initialized
-  }
-
-  // Broadcasts a message to all clients in this room
-  broadcast(message: WebSocketMessage, exclude?: WebSocket) {
-    const messageString = JSON.stringify(message);
-    this.clients.forEach((client, ws) => {
-      if (ws !== exclude) {
-        ws.send(messageString);
-      }
-    });
-  }
-
-  // Broadcasts the current room state (member list, host)
-  broadcastRoomState() {
-    const payload: RoomStatePayload = {
-      hostId: this.hostId || '',
-      members: Array.from(this.clients.values()).map(c => ({ id: c.id, username: c.username })),
-    };
-    this.broadcast({ type: 'room-state-update', payload });
-  }
-
-  // This is the main entry point for requests to this DO
-  async fetch(request: Request) {
-    // A Durable Object's name is how we identify it. We'll use the room ID.
-    const url = new URL(request.url);
-    this.roomId = url.pathname.split('/')[2];
-    
-    // Upgrade the connection to a WebSocket
-    const upgradeHeader = request.headers.get('Upgrade');
-    if (!upgradeHeader || upgradeHeader !== 'websocket') {
-      return new Response('Expected WebSocket upgrade', { status: 426 });
-    }
-    
-    const [client, server] = Object.values(new WebSocketPair());
-    // This connects the WebSocket to the Durable Object's event handlers
-    this.state.acceptWebSocket(server);
-
-    return new Response(null, { 
-      status: 101, 
-      headers: { 'Upgrade': 'websocket' },
-      webSocket: client 
-    } as any);
-  }
-  
-  // --- WebSocket Event Handlers for THIS room ---
-
-  async onWebSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
-    try {
-      const msg: WebSocketMessage = JSON.parse(message as string);
-      
-      switch (msg.type) {
-        case 'authenticate':
-          // Use a temporary Spotify API client to get user info from the token
-          const tempApi = new SpotifyWebApi({ accessToken: msg.payload.accessToken });
-          const { body: me } = await tempApi.getMe();
-          const clientInfo: Client = { id: me.id, username: me.display_name || me.id, socket: ws };
-          
-          this.clients.set(ws, clientInfo);
-
-          // The first person to authenticate becomes the host
-          if (!this.hostId) {
-            this.hostId = clientInfo.id;
-          }
-
-          ws.send(JSON.stringify({ type: 'authenticated' }));
-          this.broadcastRoomState();
-          break;
-        
-        case 'playback-state-update':
-            const currentClient = this.clients.get(ws);
-            if(currentClient && currentClient.id === this.hostId) {
-                this.broadcast({type: 'force-sync', payload: msg.payload}, ws);
-            }
-            break;
-      }
-    } catch (error) {
-      ws.send(JSON.stringify({type: 'error', payload: {message: "An internal error occurred."}}))
-    }
-  }
-
-  async onWebSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
-    this.clients.delete(ws);
-    this.broadcastRoomState(); // Update the member list for everyone else
-  }
-
-  async onWebSocketError(ws: WebSocket, error: Error) {
-    this.clients.delete(ws);
-    this.broadcastRoomState();
-  }
-}
-</file>
-
-<file path="src/index.ts">
-import { DurableObjectRoom, Env } from './DurableObjectRoom';
-
-// Cloudflare Workers types
-declare global {
-  interface ExecutionContext {
-    waitUntil(promise: Promise<any>): void;
-    passThroughOnException(): void;
-  }
-}
-
-// This is the stateless "front door" worker.
-export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const url = new URL(request.url);
-    const path = url.pathname;
-
-    // We'll use URLs like /room/create or /room/join/<id>
-    const pathSegments = path.split('/').filter(Boolean); // Filter out empty segments
-
-    if (pathSegments.length === 0 || pathSegments[0] !== 'room') {
-      return new Response('Not Found', { status: 404 });
-    }
-
-    let roomId: string;
-    
-    // Handle creating a new room
-    if (pathSegments[1] === 'create') {
-        roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
-    } else if (pathSegments[1] === 'join' && pathSegments[2]) {
-        roomId = pathSegments[2];
-    } else {
-        return new Response('Invalid request. Use /room/create or /room/join/<roomId>', { status: 400 });
-    }
-
-    // This is the core logic. Get a "stub" for the Durable Object.
-    // Cloudflare ensures that all requests for the SAME roomId go to the SAME object instance.
-    const doId = env.ROOM.idFromName(roomId);
-    const roomObject = env.ROOM.get(doId);
-    
-    // Create a new URL that includes the room ID for the DO to read
-    const newUrl = new URL(request.url);
-    newUrl.pathname = `/room/connect/${roomId}`;
-
-    // Forward the user's request to the correct Durable Object instance
-    return roomObject.fetch(request);
-  }
-};
-
-// Re-export the DO class so wrangler can find it from the main entrypoint
-export { DurableObjectRoom };
-</file>
-
-<file path="src/spotifyAuth.ts">
-import express from 'express';
-import SpotifyWebApi from 'spotify-web-api-node';
-import open from 'open';
-import dotenv from 'dotenv';
-
-dotenv.config();
-
-const scopes = [
-  'user-read-playback-state',
-  'user-modify-playback-state',
-  'user-read-currently-playing',
-  'user-read-private',
-];
-
-// This function will return a Promise that resolves with the authenticated API client
-export function authenticate(): Promise<SpotifyWebApi> {
-  return new Promise((resolve, reject) => {
-    const spotifyApi = new SpotifyWebApi({
-      clientId: process.env.SPOTIFY_CLIENT_ID,
-      clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
-      redirectUri: process.env.REDIRECT_URI,
-    });
-
-    const app = express();
-    const server = app.listen(8888, () => {
-      const authUrl = spotifyApi.createAuthorizeURL(scopes, 'some-state');
-      console.log('Please log in to Spotify in the browser that just opened.');
-      open(authUrl);
-    });
-
-    app.get('/callback', async (req, res) => {
-      const code = req.query.code as string;
-      try {
-        const data = await spotifyApi.authorizationCodeGrant(code);
-        spotifyApi.setAccessToken(data.body['access_token']);
-        spotifyApi.setRefreshToken(data.body['refresh_token']);
-        
-        res.send('<h1>Success!</h1><p>You can close this window now.</p>');
-        server.close(); // Shut down the temporary server
-        console.log('Authentication successful!');
-        resolve(spotifyApi); // Resolve the promise with the authenticated client
-      } catch (err) {
-        reject(err);
-      }
-    });
-  });
-}
-</file>
-
-<file path="src/testSync.ts">
-import SpotifyWebApi from 'spotify-web-api-node';
-import { WebSocket } from 'ws';
-import express from 'express';
-import open from 'open';
-import dotenv from 'dotenv';
-import * as readline from 'readline'; // <-- NEW: Import readline
-import { WebSocketMessage, PlaybackStatePayload } from './types';
-
-dotenv.config();
-
-const SERVER_ADDRESS = 'ws://localhost:8080';
-const POLLING_RATE_MS = 2000;
-
-function performOneTimeLogin(clientName: string): Promise<SpotifyWebApi> {
-  return new Promise((resolve, reject) => {
-    console.log(`\n--- Waiting for login for: ${clientName} ---`);
-    const spotifyApi = new SpotifyWebApi({
-      clientId: process.env.SPOTIFY_CLIENT_ID,
-      clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
-      redirectUri: process.env.REDIRECT_URI,
-    });
-
-    const app = express();
-    const port = 8888; // Use the correct port
-    const server = app.listen(port, () => {
-      const authUrl = spotifyApi.createAuthorizeURL(
-        ['user-read-playback-state', 'user-modify-playback-state', 'user-read-currently-playing', 'user-read-private'],
-        'test-state'
-      );
-      console.log(`[${clientName}] Please use the browser to log in to Spotify.`);
-      open(authUrl);
-    });
-
-    app.get('/callback', async (req, res) => {
-      try {
-        const data = await spotifyApi.authorizationCodeGrant(req.query.code as string);
-        spotifyApi.setAccessToken(data.body['access_token']);
-        spotifyApi.setRefreshToken(data.body['refresh_token']);
-        res.send(`<h1>Auth for ${clientName} successful!</h1><p>You can close this tab and return to the terminal.</p>`);
-        server.close();
-        console.log(`[${clientName}] Authentication successful!`);
-        resolve(spotifyApi);
-      } catch (err) {
-        reject(err);
-      }
-    });
-  });
-}
-
-async function runTest() {
-  console.log('Starting Spotisync test script...');
-  
-  // --- Step 1: Authenticate and set up the Host ---
-  const hostApi = await performOneTimeLogin('Host');
-  const hostWs = new WebSocket(SERVER_ADDRESS);
-  let roomId: string | null = null;
-  
-  hostWs.on('open', () => {
-    console.log('[Host] Connected to server. Authenticating...');
-    hostWs.send(JSON.stringify({ type: 'authenticate', payload: { accessToken: hostApi.getAccessToken() } }));
-  });
-
-  hostWs.on('message', (data: any) => {
-    const message: WebSocketMessage = JSON.parse(data.toString());
-    if (message.type === 'authenticated') {
-      console.log('[Host] Authenticated with server. Creating room...');
-      hostWs.send(JSON.stringify({ type: 'create-room', payload: {} }));
-    } else if (message.type === 'room-created') {
-      roomId = message.payload.roomId;
-      console.log(`[Host] Room created with ID: ${roomId}.`);
-      console.log('[Host] Now starting playback polling loop.');
-      startHostPolling(hostApi, hostWs);
-      
-      // --- Step 2: Pause and prepare for the listener ---
-      if (roomId) {
-        prepareForListener(roomId);
-      } 
-    }
-  });
-
-  // --- NEW: Function to pause the script ---
-  const prepareForListener = (joinRoomId: string) => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    
-    console.log('\n=============================================================');
-    console.log('IMPORTANT: PREPARE FOR LISTENER LOGIN');
-    console.log('1. Go to your web browser.');
-    console.log('2. Manually go to "spotify.com" and LOG OUT.');
-    console.log('3. Close any extra Spotify tabs.');
-    console.log('=============================================================');
-    
-    rl.question('--> Press ENTER here when you have logged out and are ready for the Listener to log in.', () => {
-        rl.close();
-        startListener(joinRoomId);
-    });
-  };
-}
-
-// Re-paste the unchanged helper functions here for a complete file
-const startHostPolling = (api: SpotifyWebApi, ws: WebSocket) => {
-    setInterval(async () => {
-        try {
-            const state = await api.getMyCurrentPlaybackState();
-            if (state.body && state.body.item && 'artists' in state.body.item) {
-                const payload: PlaybackStatePayload = {
-                    trackName: state.body.item.name,
-                    artistName: state.body.item.artists.map((a: any) => a.name).join(', '),
-                    trackUri: state.body.item.uri,
-                    durationMs: state.body.item.duration_ms,
-                    positionMs: state.body.progress_ms || 0,
-                    isPlaying: state.body.is_playing,
-                    timestamp: Date.now(),
-                };
-                ws.send(JSON.stringify({ type: 'playback-state-update', payload }));
-            }
-        } catch {}
-    }, POLLING_RATE_MS);
-};
-
-const startListener = async (joinRoomId: string) => {
-    const listenerApi = await performOneTimeLogin('Listener');
-    const listenerWs = new WebSocket(SERVER_ADDRESS);
-
-    listenerWs.on('open', () => {
-        console.log('[Listener] Connected to server. Authenticating...');
-        listenerWs.send(JSON.stringify({ type: 'authenticate', payload: { accessToken: listenerApi.getAccessToken() } }));
-    });
-
-    listenerWs.on('message', (data: any) => {
-        const message: WebSocketMessage = JSON.parse(data.toString());
-        if (message.type === 'authenticated') {
-            console.log(`[Listener] Authenticated with server. Joining room ${joinRoomId}...`);
-            listenerWs.send(JSON.stringify({ type: 'join-room', payload: { roomId: joinRoomId } }));
-        } else if (message.type === 'joined-room') {
-            console.log(`[Listener] Successfully joined room ${joinRoomId}. Waiting for sync...`);
-        } else if (message.type === 'force-sync') {
-            console.log(`[Listener] Sync received: ${message.payload.isPlaying ? 'PLAYING' : 'PAUSED'}. Applying...`);
-            const state: PlaybackStatePayload = message.payload;
-            if (state.isPlaying) {
-                listenerApi.play({ uris: [state.trackUri], position_ms: state.positionMs }).catch(() => {});
-            } else {
-                listenerApi.pause().catch(() => {});
-            }
-        }
-    });
-};
-
-runTest();
-</file>
-
-<file path="src/types.ts">
-export interface WebSocketMessage {
-  type: string;
-  payload: any;
-}
-
-// We can also define specific payload structures for clarity
-export interface CreateRoomPayload {
-  // No payload needed for creating a room
-}
-
-export interface JoinRoomPayload {
-  roomId: string;
-}
-
-export interface RoomCreatedPayload {
-  roomId: string;
-}
-
-export interface UserJoinedPayload {
-  clientId: string;
-}
-
-export interface ErrorPayload {
-  message: string;
-}
-
-// Now includes all the data we need for a rich UI
-export interface PlaybackStatePayload {
-  trackName: string;
-  artistName: string;
-  trackUri: string;
-  durationMs: number;
-  positionMs: number;
-  isPlaying: boolean;
-  timestamp: number;
-}
-
-// New interface for room state updates
-export interface RoomStatePayload {
-  hostId: string;
-  members: {
-    id: string;
-    username: string;
-  }[];
-}
-</file>
-
-<file path="src/tokenManager.ts">
-import fs from 'fs-extra';
-import path from 'path';
-import envPaths from 'env-paths';
-import SpotifyWebApi from 'spotify-web-api-node';
-import express from 'express';
-import open from 'open';
-
-// Define the structure of our token data
-interface TokenData {
-  accessToken: string;
-  refreshToken: string;
-  expiresAt: number;
-}
-
-const paths = envPaths('spot-along', { suffix: '' });
-const configPath = path.join(paths.config, 'config.json');
-
-async function saveTokens(data: TokenData): Promise<void> {
-  try {
-    // Ensure the directory exists, then write the file
-    await fs.ensureDir(path.dirname(configPath));
-    await fs.writeJson(configPath, data);
-    console.log('Tokens saved successfully.');
-  } catch (error) {
-    console.error('Error saving tokens:', error);
-  }
-}
-
-async function loadTokens(): Promise<TokenData | null> {
-  try {
-    // Check if the file exists and load it
-    if (await fs.pathExists(configPath)) {
-      const data = await fs.readJson(configPath);
-      return data as TokenData;
-    }
-    return null; // No config file found
-  } catch (error) {
-    console.error('Error loading tokens:', error);
-    return null;
-  }
-}
-
-// The main function with new validation logic
-export async function getAuthenticatedApi(): Promise<SpotifyWebApi> {
-  const spotifyApi = new SpotifyWebApi({
-    clientId: process.env.SPOTIFY_CLIENT_ID,
-    clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
-    redirectUri: process.env.REDIRECT_URI,
-  });
-
-  const savedTokens = await loadTokens();
-
-  if (savedTokens) {
-    spotifyApi.setAccessToken(savedTokens.accessToken);
-    spotifyApi.setRefreshToken(savedTokens.refreshToken);
-    try {
-      const data = await spotifyApi.refreshAccessToken();
-      const newAccessToken = data.body['access_token'];
-      spotifyApi.setAccessToken(newAccessToken);
-
-      // --- NEW: VALIDATE EVEN REFRESHED TOKENS ---
-      // This handles the case where a user downgrades from Premium to Free.
-      const { body: me } = await spotifyApi.getMe();
-      if (me.product !== 'premium') {
-        await resetConfig(); // Clean up the invalid tokens
-        throw new Error('PREMIUM_REQUIRED_AFTER_REFRESH');
-      }
-
-      await saveTokens({
-        accessToken: newAccessToken,
-        refreshToken: spotifyApi.getRefreshToken()!,
-        expiresAt: Date.now() + data.body['expires_in'] * 1000,
-      });
-      return spotifyApi;
-    } catch (error: any) {
-        await resetConfig(); // Clean up if refresh or validation fails
-        if(error.message === 'PREMIUM_REQUIRED_AFTER_REFRESH') {
-            throw new Error('Your Spotify account is no longer Premium. Please log in with a Premium account.');
-        }
-        // Fall through to full login
-    }
-  }
-
-  // --- Fallback: Full Browser Authentication ---
-  console.log('No valid tokens found. Starting login process...');
-  const tokenData = await fullAuthentication(spotifyApi);
-  spotifyApi.setAccessToken(tokenData.accessToken);
-  spotifyApi.setRefreshToken(tokenData.refreshToken);
-
-  // --- NEW: CRUCIAL VALIDATION STEP BEFORE SAVING ---
-  try {
-    const { body: me } = await spotifyApi.getMe();
-    
-    // Check the 'product' field from the user profile
-    if (me.product !== 'premium') {
-      throw new Error('PREMIUM_REQUIRED'); // Throw a specific error we can catch
-    }
-
-    // If we get here, the user is Premium. NOW it's safe to save.
-    console.log(`Authenticated as Premium user: ${me.display_name}`);
-    await saveTokens(tokenData);
-    return spotifyApi;
-
-  } catch (error: any) {
-    // If validation fails for ANY reason, delete the config file that was just created.
-    await resetConfig(); 
-
-    // Provide a clear, user-friendly error message.
-    if (error.message === 'PREMIUM_REQUIRED') {
-      throw new Error(
-        'This application requires a Spotify Premium account. The login was successful, but your account type is not supported. Please restart and log in with a Premium account.'
-      );
-    } else {
-       // Handle other errors, like the 403 we saw before
-       throw new Error(
-          `Failed to verify your Spotify account details after login (Error: ${error.statusCode || 'Unknown'}). Please check your permissions and try again.`
-       );
-    }
-  }
-}
-
-// Re-paste the helper functions here
-function fullAuthentication(spotifyApi: SpotifyWebApi): Promise<TokenData> {
-  return new Promise((resolve, reject) => {
-    const app = express();
-    const server = app.listen(8888, () => {
-      const authUrl = spotifyApi.createAuthorizeURL(
-        ['user-read-playback-state', 'user-modify-playback-state', 'user-read-currently-playing', 'user-read-private'], // ensure user-read-private is here
-        'some-state'
-      );
-      console.log('Please log in to Spotify in the browser that just opened.');
-      open(authUrl);
-    });
-
-    app.get('/callback', async (req, res) => {
-      const code = req.query.code as string;
-      try {
-        const data = await spotifyApi.authorizationCodeGrant(code);
-        res.send('<h1>Success!</h1><p>You can close this window now.</p>');
-        server.close();
-        
-        const tokenData: TokenData = {
-          accessToken: data.body['access_token'],
-          refreshToken: data.body['refresh_token'],
-          expiresAt: Date.now() + data.body['expires_in'] * 1000,
-        };
-        resolve(tokenData);
-      } catch (err) {
-        reject(err);
-      }
-    });
-  });
-}
-
-export function getConfigPath(): string {
-  const paths = envPaths('spot-along', { suffix: '' });
-  return path.join(paths.config, 'config.json');
-}
-
-export async function resetConfig(): Promise<void> {
-  const configFilePath = getConfigPath();
-  try {
-    if (await fs.pathExists(configFilePath)) {
-      await fs.remove(configFilePath);
-      console.log('Configuration file has been reset.');
-    }
-  } catch (error) {
-    console.error('Failed to reset configuration:', error);
-  }
-}
-</file>
-
-<file path="src/client.ts">
-import { WebSocket } from 'ws';
-import * as readline from 'readline';
-import dotenv from 'dotenv';
-import chalk from 'chalk';
-import { getAuthenticatedApi, resetConfig } from './tokenManager';
-import { WebSocketMessage, PlaybackStatePayload, RoomStatePayload } from './types';
-import * as UIManager from './uiManager';
-
-dotenv.config({ quiet: true });
-
-// THIS WILL BE YOUR PUBLIC CLOUDFLARE URL
-const BASE_SERVER_ADDRESS = 'spot-along-server.sarthakshitole.workers.dev'; 
-
-let currentMode = 'menu';
-let ws: WebSocket | null = null;
-let spotifyApi: any;
-let isHost = false;
-
-async function connectToRoom(path: string) {
-    // Use wss:// for secure connections
-    const fullAddress = `wss://${BASE_SERVER_ADDRESS}/room/${path}`;
-    ws = new WebSocket(fullAddress);
-
-    ws.on('open', () => {
-        console.log('Connected to room!');
-        ws!.send(JSON.stringify({ type: 'authenticate', payload: { accessToken: spotifyApi.getAccessToken() } }));
-    });
-
-    ws.on('message', (data: any) => {
-        const message: WebSocketMessage = JSON.parse(data.toString());
-        switch (message.type) {
-            case 'authenticated':
-                console.log('Authenticated with server!');
-                break;
-            case 'room-created':
-                UIManager.setRoom(message.payload.roomId);
-                currentMode = 'in-room';
-                UIManager.setMode('in-room');
-                startHostPolling();
-                break;
-            case 'joined-room':
-                UIManager.setRoom(message.payload.roomId);
-                currentMode = 'in-room';
-                UIManager.setMode('in-room');
-                break;
-            case 'room-state-update':
-                UIManager.setRoomState(message.payload);
-                break;
-            case 'force-sync':
-                if (!isHost) {
-                    const state: PlaybackStatePayload = message.payload;
-                    UIManager.setPlaybackState(state);
-                    if (state.isPlaying) spotifyApi.play({ uris: [state.trackUri], position_ms: state.positionMs }).catch(() => {});
-                    else spotifyApi.pause().catch(() => {});
-                }
-                break;
-            case 'error':
-                UIManager.showNotification(`SERVER ERROR: ${message.payload.message}`);
-                currentMode = 'menu';
-                UIManager.setMode('menu');
-                break;
-        }
-        UIManager.render();
-    });
-
-    ws.on('close', () => {
-        if(hostPollingInterval) clearInterval(hostPollingInterval);
-        console.log('Connection to server lost.');
-        process.exit();
-    });
-}
-
-let hostPollingInterval: NodeJS.Timeout;
-const startHostPolling = () => {
-    isHost = true;
-    hostPollingInterval = setInterval(async () => {
-        try {
-            const state = await spotifyApi.getMyCurrentPlaybackState();
-            if (state.body && state.body.item && 'artists' in state.body.item) {
-                const currentState: PlaybackStatePayload = {
-                    trackName: state.body.item.name,
-                    artistName: state.body.item.artists.map((a: any) => a.name).join(', '),
-                    trackUri: state.body.item.uri,
-                    durationMs: state.body.item.duration_ms,
-                    positionMs: state.body.progress_ms || 0,
-                    isPlaying: state.body.is_playing,
-                    timestamp: Date.now(),
-                };
-                UIManager.setPlaybackState(currentState);
-                ws!.send(JSON.stringify({ type: 'playback-state-update', payload: currentState }));
-            } else {
-                UIManager.setPlaybackState(null!);
-            }
-            UIManager.render();
-        } catch {}
-    }, 2000);
-};
-
-// Setup readline for user input
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-});
-
-async function main() {
-    try {
-        spotifyApi = await getAuthenticatedApi();
-        const me = await spotifyApi.getMe();
-        UIManager.setUsername(me.body.display_name || 'Spotify User');
-
-        readline.emitKeypressEvents(process.stdin);
-        if (process.stdin.isTTY) process.stdin.setRawMode(true);
-        
-        process.stdin.on('keypress', (str, key) => {
-            if (key.ctrl && key.name === 'c' || (currentMode !== 'menu' && key.name === 'q')) {
-                process.exit();
-            }
-
-            if (currentMode === 'menu') {
-                if (key.name === 'c') {
-                    connectToRoom('create');
-                }
-                if (key.name === 'h') { 
-                    currentMode = 'help'; 
-                    UIManager.setMode('help'); 
-                }
-                if (key.name === 'q') process.exit();
-                
-                if (key.name === 'j') {
-                    currentMode = 'prompt';
-                    
-                    if (process.stdin.isTTY) process.stdin.setRawMode(false);
-                    
-                    rl.question(chalk.cyanBright('Enter Room ID to join: '), (roomId) => {
-                        if(roomId) {
-                            connectToRoom(`join/${roomId.trim().toUpperCase()}`);
-                        }
-                        if (process.stdin.isTTY) process.stdin.setRawMode(true);
-                        currentMode = 'menu';
-                        UIManager.setMode('menu');
-                        UIManager.render();
-                    });
-                    return;
-                }
-            } else if (currentMode === 'help') {
-                if (key.name === 'b') { 
-                    currentMode = 'menu'; 
-                    UIManager.setMode('menu'); 
-                }
-                if (key.name === 'r') {
-                    resetConfig();
-                    UIManager.showNotification('Configuration Reset! Please restart.');
-                    setTimeout(() => process.exit(), 1000);
-                }
-            }
-            UIManager.render();
-        });
-
-        process.on('exit', () => console.log(`\n${chalk.bold.magenta('Happy Listening!')}\n`));
-        
-        UIManager.render();
-
-    } catch (error) {
-        console.error('Application failed to start:', error);
-        process.exit(1);
-    }
-}
-
-main();
-</file>
-
-<file path="src/uiManager.ts">
-import chalk from 'chalk';
-import logUpdate from 'log-update';
-import chalkAnimation from 'chalk-animation';
-import { PlaybackStatePayload, RoomStatePayload } from './types';
-import * as TokenManager from './tokenManager';
-
-const uiState = {
-  username: 'User',
-  mode: 'menu' as 'menu' | 'in-room' | 'help',
-  room: null as string | null,
-  lastPlaybackState: null as PlaybackStatePayload | null,
-  roomState: null as RoomStatePayload | null, // Add new state property
-  notification: null as string | null,
-};
-
-const titleAnimation = chalkAnimation.karaoke('Spot-along', 2);
-
-// A helper for creating hyperlinks in modern terminals
-const link = (text: string, url: string) => `\u001b]8;;${url}\u0007${text}\u001b]8;;\u0007`;
-
-function createProgressBar(progress: number, width = 30): string {
-  const filled = Math.round(progress * width);
-  const empty = width - filled;
-  return `[${chalk.green('━'.repeat(filled))}${chalk.gray('━'.repeat(empty))}]`;
-}
-
-function formatDuration(ms: number): string {
-    const totalSeconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-}
-
-// The main render loop using log-update for flicker-free UI
-export function render() {
-  const header = `\n`; // We let the animation handle the title now
-  const footer = `\n${chalk.gray('──────────────────────────────────')}\nMade with ${chalk.red('♥')} by ${link('x.com/Sarthakhuh', 'https://x.com/Sarthakhuh')}`;
-
-  let mainContent = '';
-  if (uiState.mode === 'menu') mainContent = drawMenu();
-  if (uiState.mode === 'in-room') mainContent = drawInRoomUI();
-  if (uiState.mode === 'help') mainContent = drawHelpScreen();
-
-  logUpdate(`${header}${mainContent}${footer}`);
-}
-
-function drawMenu(): string {
-  let content = `${chalk.bold(`Welcome, ${chalk.yellow(uiState.username)}!`)}\n\n`;
-  content += `${chalk.cyanBright.bold('[c]')} - Create a new listening room\n`;
-  content += `${chalk.cyanBright.bold('[j]')} - Join a room\n`;
-  content += `${chalk.cyanBright.bold('[h]')} - Help & Settings\n`;
-  content += `${chalk.cyanBright.bold('[q]')} - Quit\n`;
-  if(uiState.notification) content += chalk.yellow(`\n⚡ ${uiState.notification}`);
-  return content;
-}
-
-function drawInRoomUI(): string {
-  const playbackState = uiState.lastPlaybackState;
-  const roomState = uiState.roomState;
-
-  let content = `${chalk.bold(`› In Room: ${chalk.greenBright(uiState.room)}`)}\n\n`;
-
-  // --- Render Playback Info ---
-  if (!playbackState || !playbackState.isPlaying) {
-    content += chalk.bold.red('⏹️ Nothing is playing on Spotify.');
-  } else {
-    const progressPercent = playbackState.positionMs / playbackState.durationMs;
-    const progressBar = createProgressBar(progressPercent);
-    content += `🎧 ${chalk.bold.white(playbackState.trackName)}\n`;
-    content += `   ${chalk.cyan(playbackState.artistName)}\n\n`;
-    content += `   ${progressBar} ${formatDuration(playbackState.positionMs)} / ${formatDuration(playbackState.durationMs)}`;
-  }
-  
-  // --- NEW: Render Member List ---
-  content += `\n\n${chalk.bold('Members in Room:')}\n`;
-  if (roomState && roomState.members) {
-    roomState.members.forEach(member => {
-      if (member.id === roomState.hostId) {
-        content += ` ${chalk.yellow('👑')} ${chalk.bold(member.username)} (Host)\n`;
-      } else {
-        content += `    ${member.username}\n`;
-      }
-    });
-  }
-
-  content += `\n\n${chalk.gray('Press [q] to leave the room and quit.')}`;
-  return content;
-}
-
-function drawHelpScreen(): string {
-    const configPath = TokenManager.getConfigPath();
-    let content = `${chalk.bold.yellow('⚙️ Help & Settings')}\n\n`;
-    content += `This application saves your Spotify authentication tokens so you don't have to log in every time. The configuration file is stored at:\n`;
-    content += `${chalk.cyan(configPath)}\n\n`;
-    content += `If you are having issues, you can reset the application by deleting this file.\n\n`;
-    content += `${chalk.redBright.bold('[r]')} - Reset Configuration (deletes the file)\n`;
-    content += `${chalk.cyanBright.bold('[b]')} - Back to Main Menu\n`;
-    return content;
-}
-
-// --- UI State Updaters ---
-export function setUsername(name: string) { uiState.username = name; }
-export function setMode(mode: 'menu' | 'in-room' | 'help') { uiState.mode = mode; }
-export function setRoom(roomId: string) { uiState.room = roomId; uiState.mode = 'in-room'; }
-export function setPlaybackState(state: PlaybackStatePayload) { uiState.lastPlaybackState = state; }
-
-// NEW: Function to update the room state from the client
-export function setRoomState(state: RoomStatePayload) {
-  uiState.roomState = state;
-}
-
-export function showNotification(message: string, duration = 3000) {
-    uiState.notification = message;
-    render();
-    setTimeout(() => {
-        uiState.notification = null;
-        render();
-    }, duration);
-}
-</file>
-
-<file path="package.json">
-{
-  "name": "spot-along",
-  "version": "1.0.0",
-  "description": "Real-time Spotify listening parties, right in your terminal.",
-  "main": "dist/client.js",
-  "bin": {
-    "spot-along": "dist/client.js"
-  },
-  "scripts": {
-    "build": "tsc",
-    "prepublishOnly": "npm run build",
-    "start:client": "ts-node src/client.ts",
-    "test:sync": "ts-node src/testSync.ts"
-  },
-  "files": [
-    "dist"
-  ],
-  "keywords": [
-    "spotify",
-    "cli",
-    "terminal",
-    "tui",
-    "music",
-    "listen-along",
-    "party",
-    "sync"
-  ],
-  "author": "Sarthak (https://x.com/Sarthakhuh)",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/Sarthakischill/spot-along.git"
-  },
-  "license": "MIT",
-  "dependencies": {
-    "chalk": "^4.1.2",
-    "chalk-animation": "^1.6.0",
-    "dotenv": "^16.4.5",
-    "env-paths": "^3.0.0",
-    "express": "^4.19.2",
-    "fs-extra": "^11.2.0",
-    "log-update": "^4.0.0",
-    "open": "^8.4.2",
-    "spotify-web-api-node": "^5.0.2",
-    "ws": "^8.17.1"
-  },
-  "devDependencies": {
-    "@types/boxen": "^3.0.5",
-    "@types/chalk": "^2.2.0",
-    "@types/chalk-animation": "^1.6.3",
-    "@types/cli-progress": "^3.11.5",
-    "@types/express": "^4.17.21",
-    "@types/fs-extra": "^11.0.4",
-    "@types/node": "^16.18.101",
-    "@types/open": "^6.2.1",
-    "@types/spotify-web-api-node": "^5.0.11",
-    "@types/ws": "^8.5.10",
-    "ts-node": "^10.9.2",
-    "ts-node-dev": "^2.0.0",
-    "typescript": "^5.5.3"
-  }
-}
 </file>
 
 </files>

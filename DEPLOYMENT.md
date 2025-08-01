@@ -1,146 +1,182 @@
-# Spot-along Deployment Guide
+# Deployment Guide for ListenAlong
 
-This guide will walk you through deploying both the main application and the authentication service to make Spot-along publicly available.
+This guide will help you deploy both the main server and authentication service to Cloudflare Workers.
 
 ## Prerequisites
 
 1. **Cloudflare Account**: Sign up at [cloudflare.com](https://cloudflare.com)
-2. **Spotify Developer Account**: Create an app at [developer.spotify.com](https://developer.spotify.com/dashboard)
-3. **Node.js**: Version 16 or later
+2. **Wrangler CLI**: Install with `npm install -g wrangler`
+3. **Spotify Developer Account**: Create at [developer.spotify.com](https://developer.spotify.com)
 
-## Step 1: Deploy the Authentication Service
-
-The authentication service handles Spotify OAuth flow for all users.
-
-### 1.1 Set Up Spotify App
+## Step 1: Spotify App Setup
 
 1. Go to [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
-2. Create a new app or use an existing one
-3. Note your **Client ID** and **Client Secret**
-4. Click "Edit Settings"
-5. Add redirect URI: `https://spot-along-auth.sarthakshitole.workers.dev/callback`
-6. Save settings
+2. Click "Create App"
+3. Fill in the details:
+   - **App name**: `ListenAlong Auth`
+   - **App description**: `Authentication service for ListenAlong CLI`
+   - **Website**: `https://your-domain.com` (can be any valid URL)
+   - **Redirect URI**: `https://your-auth-service.your-subdomain.workers.dev/callback`
+4. Save the **Client ID** and **Client Secret**
 
-### 1.2 Deploy Auth Service
+## Step 2: Deploy Main Server
+
+The main server handles WebSocket connections and room management.
 
 ```bash
-# Navigate to auth server directory
+# In the root directory
+npm install
+npm run deploy
+```
+
+This will deploy to `spot-along-server.your-subdomain.workers.dev`
+
+## Step 3: Deploy Authentication Service
+
+### 3.1 Create KV Namespace
+
+The authentication service needs a KV namespace to temporarily store tokens during the OAuth flow.
+
+```bash
+# Navigate to auth-server directory
 cd auth-server
 
-# Install dependencies
-npm install
+# Create the main KV namespace
+npx wrangler kv:namespace create TOKEN_STORE
 
-# Login to Cloudflare
-npx wrangler login
+# Create the preview KV namespace (for development)
+npx wrangler kv:namespace create TOKEN_STORE --preview
+```
 
-# Set environment variables (you'll be prompted for values)
+You'll see output like this:
+```
+🌀 Creating namespace with title "spot-along-auth-TOKEN_STORE"
+✨ Success!
+Add the following to your configuration file:
+id = "abc123def456ghi789jkl012mno345pqr678stu901vwx234yz"
+```
+
+### 3.2 Update Configuration
+
+Edit `auth-server/wrangler.toml` and replace the placeholder IDs:
+
+```toml
+[[kv_namespaces]]
+binding = "TOKEN_STORE"
+id = "abc123def456ghi789jkl012mno345pqr678stu901vwx234yz"  # Your main namespace ID
+preview_id = "def456ghi789jkl012mno345pqr678stu901vwx234yzabc123"  # Your preview namespace ID
+```
+
+### 3.3 Set Environment Variables
+
+Set your Spotify credentials as secrets:
+
+```bash
+# Set the main credentials
 npx wrangler secret put SPOTIFY_CLIENT_ID
+# Enter your Spotify Client ID when prompted
+
 npx wrangler secret put SPOTIFY_CLIENT_SECRET
+# Enter your Spotify Client Secret when prompted
+```
 
-# Deploy
+### 3.4 Deploy the Auth Service
+
+```bash
 npm run deploy
 ```
 
-### 1.3 Verify Auth Service
+This will deploy to `spot-along-auth.your-subdomain.workers.dev`
 
-Visit `https://spot-along-auth.sarthakshitole.workers.dev/login` - it should redirect to Spotify.
+## Step 4: Update Client Configuration
 
-## Step 2: Deploy the Main Application
+Update the authentication service URL in `src/tokenManager.ts`:
 
-The main application handles room management and WebSocket connections.
-
-### 2.1 Deploy Main Worker
-
-```bash
-# Navigate back to main directory
-cd ..
-
-# Install dependencies (if not already done)
-npm install
-
-# Deploy main worker
-npm run deploy
+```typescript
+const AUTH_SERVICE_URL = 'https://spot-along-auth.your-subdomain.workers.dev';
 ```
 
-### 2.2 Verify Main Application
+## Step 5: Test the Deployment
 
-The main worker should be available at `https://spot-along-server.sarthakshitole.workers.dev`
+1. **Test the main server**:
+   ```bash
+   curl https://spot-along-server.your-subdomain.workers.dev/health
+   ```
 
-## Step 3: Test the Complete System
+2. **Test the auth service**:
+   ```bash
+   curl https://spot-along-auth.your-subdomain.workers.dev/health
+   ```
 
-### 3.1 Test Authentication Flow
-
-1. Run `npx spot-along` (or `npm start` if testing locally)
-2. Press `c` to create a room
-3. Browser should open to auth service
-4. Complete Spotify login
-5. Copy tokens from success page
-6. Paste into terminal
-7. Verify you're in a room
-
-### 3.2 Test Room Functionality
-
-1. Open another terminal
-2. Run `npx spot-along` again
-3. Press `j` to join
-4. Enter the room ID from step 1
-5. Verify both users are in the same room
-
-## Step 4: Publish to NPM
-
-Once everything is working:
-
-```bash
-# Build the application
-npm run build
-
-# Publish to NPM
-npm publish
-```
+3. **Test the complete flow**:
+   ```bash
+   npm start
+   ```
 
 ## Troubleshooting
 
-### Auth Service Issues
+### Common Issues
 
-- **"Invalid client" error**: Check that redirect URI in Spotify dashboard matches exactly
-- **Environment variables not found**: Ensure secrets are set with `wrangler secret put`
-- **CORS errors**: Check that CORS headers are properly configured
+**"KV namespace not found"**
+- Ensure you've created both the main and preview KV namespaces
+- Verify the IDs in `wrangler.toml` are correct
+- Check that you're using the right account (if you have multiple Cloudflare accounts)
 
-### Main Application Issues
+**"Authentication failed"**
+- Verify your Spotify app credentials are set correctly
+- Check that the redirect URI matches exactly
+- Ensure the auth service URL is updated in `src/tokenManager.ts`
 
-- **WebSocket connection failed**: Check that Durable Objects are properly configured
-- **Room creation fails**: Verify the main worker is deployed and accessible
-- **Host assignment issues**: Check Durable Object storage configuration
+**"WebSocket connection failed"**
+- Verify the main server is deployed and accessible
+- Check that the server URL in `src/client.ts` is correct
 
-### General Issues
+### Debugging
 
-- **"Premium required" error**: Ensure user has Spotify Premium account
-- **Token refresh fails**: Check that refresh tokens are being saved correctly
-- **Connection timeouts**: Verify both workers are deployed and accessible
+Enable debug logging:
 
-## Security Considerations
+```bash
+# For the main server
+wrangler dev --log-level debug
 
-1. **Environment Variables**: Never commit secrets to git
-2. **CORS**: Properly configured for production domains
-3. **Token Storage**: Tokens are only stored locally on user machines
-4. **HTTPS**: All communication uses secure connections
+# For the auth service
+cd auth-server
+wrangler dev --log-level debug
+```
 
-## Monitoring
+### Environment Variables
 
-- Use Cloudflare Workers analytics to monitor usage
-- Check Cloudflare Workers logs for errors
-- Monitor Spotify API rate limits
+You can also set environment variables in the Cloudflare dashboard:
 
-## Scaling
+1. Go to Workers & Pages
+2. Select your worker
+3. Go to Settings → Variables
+4. Add your secrets there
 
-The application automatically scales with Cloudflare Workers:
-- Each room is a separate Durable Object
-- WebSocket connections are handled efficiently
-- No server management required
+## Production Considerations
+
+### Security
+- Use environment variables for all secrets
+- Regularly rotate your Spotify app credentials
+- Monitor your Cloudflare usage
+
+### Performance
+- The free tier includes 100,000 requests/day
+- KV operations count toward your usage
+- Consider upgrading for high-traffic applications
+
+### Monitoring
+- Use Cloudflare Analytics to monitor usage
+- Set up alerts for error rates
+- Monitor KV namespace usage
 
 ## Support
 
-For issues or questions:
-- Check the main README.md for usage instructions
-- Review this deployment guide for setup issues
-- Check Cloudflare Workers documentation for platform-specific issues 
+If you encounter issues:
+
+1. Check the [troubleshooting section](#troubleshooting)
+2. Review the Cloudflare Workers logs
+3. Verify all environment variables are set
+4. Test with a fresh deployment
+
+For additional help, please open an issue on GitHub. 

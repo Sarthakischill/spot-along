@@ -2,14 +2,10 @@ name = "spot-along-auth"
 main = "index.js"
 compatibility_date = "2024-05-10"
 
-# ADD THIS SECTION TO CREATE THE TEMPORARY TOKEN STORE
+# This section correctly binds your KV namespace to this authentication worker.
 [[kv_namespaces]]
 binding = "TOKEN_STORE"
-id = "80fc25fb6db746458bad163a53d054d1" # Replace with actual ID from Cloudflare dashboard
-preview_id = "80fc25fb6db746458bad163a53d054d1" # Replace with actual ID from Cloudflare dashboard
-
-[env.production]
-name = "spot-along-auth"
-
-[env.staging]
-name = "spot-along-auth-staging" 
+# The ID from your screenshot for production deploys.
+id = "80fc25fb6db746458bad163a53d054d1"
+# The same ID can be used for local testing (`wrangler dev`). [9, 10]
+preview_id = "80fc25fb6db746458bad163a53d054d1"

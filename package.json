@@ -1,10 +1,10 @@
 {
-  "name": "listenalong",
+  "name": "spotalong",
   "version": "1.0.4",
   "description": "Real-time Spotify listening parties, right in your terminal.",
   "main": "dist/client.js",
   "bin": {
-    "listenalong": "dist/client.js"
+    "spotalong": "dist/client.js"
   },
   "scripts": {
     "build": "tsc",
@@ -54,6 +54,6 @@
     "@types/ws": "^8.5.10",
     "ts-node": "^10.9.2",
     "typescript": "^5.5.3",
-    "wrangler": "^4.26.0"
+    "wrangler": "^3.63.0"
   }
 }
