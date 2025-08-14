@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 "use strict";
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -51,6 +52,8 @@ const dotenv_1 = __importDefault(require("dotenv"));
 const chalk_1 = __importDefault(require("chalk"));
 const tokenManager_1 = require("./tokenManager");
 const UIManager = __importStar(require("./uiManager"));
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { version } = require('../package.json');
 dotenv_1.default.config({ quiet: true });
 const BASE_SERVER_ADDRESS = 'spot-along-server.sarthakshitole.workers.dev';
 let currentMode = 'menu';
@@ -64,29 +67,24 @@ const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout
 });
-// Main keypress handler with proper state management
 const keypressHandler = (str, key) => __awaiter(void 0, void 0, void 0, function* () {
     if (key.ctrl && key.name === 'c') {
         cleanup();
         process.exit();
     }
-    // Ignore input if we're connecting or in prompt mode
-    if (isConnecting || currentMode === 'prompt') {
+    if (isConnecting || currentMode === 'prompt')
         return;
-    }
     if (currentMode === 'menu') {
         switch (key.name) {
             case 'c':
-                if (!isConnecting) {
+                if (!isConnecting)
                     yield connectToRoom('create');
-                }
                 return;
             case 'j':
                 if (!isConnecting) {
                     const roomId = yield promptForRoomId();
-                    if (roomId) {
+                    if (roomId)
                         yield connectToRoom('join', roomId);
-                    }
                     UIManager.render();
                 }
                 return;
@@ -100,9 +98,8 @@ const keypressHandler = (str, key) => __awaiter(void 0, void 0, void 0, function
         }
     }
     else if (currentMode === 'in-room') {
-        if (key.name === 'q') {
+        if (key.name === 'q')
             leaveRoom();
-        }
     }
     else if (currentMode === 'help') {
         if (key.name === 'b') {
@@ -128,18 +125,14 @@ function connectToRoom(action, roomId) {
         isConnecting = true;
         const path = action === 'create' ? 'create' : `join/${roomId}`;
         const fullAddress = `wss://${BASE_SERVER_ADDRESS}/room/${path}`;
-        // Clean up any existing connections
         cleanup();
         try {
-            // Validate Spotify API token before connecting
             yield spotifyApi.getMe();
         }
         catch (error) {
-            // Try to refresh token if validation fails
             try {
                 const data = yield spotifyApi.refreshAccessToken();
                 spotifyApi.setAccessToken(data.body['access_token']);
-                // Test again after refresh
                 yield spotifyApi.getMe();
             }
             catch (refreshError) {
@@ -151,11 +144,9 @@ function connectToRoom(action, roomId) {
         }
         UIManager.showNotification(`${action === 'create' ? 'Creating room' : 'Joining room'}...`, 30000);
         UIManager.render();
-        // Set connection timeout with better error handling
         connectionTimeout = setTimeout(() => {
-            if (ws) {
+            if (ws)
                 ws.terminate();
-            }
             isConnecting = false;
             UIManager.showNotification('Connection timed out. Server may be unavailable.', 5000);
             UIManager.render();
@@ -170,15 +161,14 @@ function connectToRoom(action, roomId) {
                 try {
                     const token = spotifyApi.getAccessToken();
                     if (!token) {
-                        handleConnectionError('Authentication token is missing. Please restart the app.');
+                        handleConnectionError('Auth token is missing.');
                         return;
                     }
                     const type = action === 'create' ? 'create-room' : 'join-room';
-                    const payload = { accessToken: token };
-                    ws.send(JSON.stringify({ type, payload }));
+                    ws.send(JSON.stringify({ type, payload: { accessToken: token } }));
                 }
                 catch (error) {
-                    handleConnectionError('Failed to send connection message');
+                    handleConnectionError('Failed to send connection message.');
                 }
             });
             ws.on('message', (data) => {
@@ -187,15 +177,11 @@ function connectToRoom(action, roomId) {
                     handleWebSocketMessage(message);
                 }
                 catch (error) {
-                    handleConnectionError('Invalid message received from server');
+                    handleConnectionError('Invalid message from server.');
                 }
             });
-            ws.on('close', (code, reason) => {
-                handleConnectionClose(code, reason === null || reason === void 0 ? void 0 : reason.toString());
-            });
-            ws.on('error', (err) => {
-                handleConnectionError(`Connection failed: ${err.message}`);
-            });
+            ws.on('close', (code, reason) => handleConnectionClose(code, reason === null || reason === void 0 ? void 0 : reason.toString()));
+            ws.on('error', (err) => handleConnectionError(`Connection failed: ${err.message}`));
         }
         catch (error) {
             isConnecting = false;
@@ -203,7 +189,7 @@ function connectToRoom(action, roomId) {
                 clearTimeout(connectionTimeout);
                 connectionTimeout = null;
             }
-            UIManager.showNotification('Failed to create connection. Please try again.', 5000);
+            UIManager.showNotification('Failed to create connection.', 5000);
             UIManager.render();
         }
     });
@@ -217,7 +203,7 @@ function handleWebSocketMessage(message) {
             UIManager.setRoom(message.payload.roomId);
             UIManager.setMode('in-room');
             startHostPolling();
-            UIManager.showNotification(`Room ${message.payload.roomId} created! Share this ID with friends.`, 6000);
+            UIManager.showNotification(`Room ${message.payload.roomId} created!`, 6000);
             break;
         case 'joined-room':
             isConnecting = false;
@@ -225,19 +211,18 @@ function handleWebSocketMessage(message) {
             currentMode = 'in-room';
             UIManager.setRoom(message.payload.roomId);
             UIManager.setMode('in-room');
-            UIManager.showNotification(`Successfully joined room ${message.payload.roomId}!`, 4000);
+            UIManager.showNotification(`Joined room ${message.payload.roomId}!`, 4000);
             break;
         case 'room-state-update':
             UIManager.setRoomState(message.payload);
             break;
         case 'force-sync':
-            if (!isHost) {
+            if (!isHost)
                 syncToHostPlayback(message.payload);
-            }
             break;
         case 'error':
             isConnecting = false;
-            UIManager.showNotification(`${message.payload.message}`, 5000);
+            UIManager.showNotification(message.payload.message, 5000);
             leaveRoom();
             break;
     }
@@ -261,17 +246,13 @@ function handleConnectionClose(code, reason) {
         clearTimeout(connectionTimeout);
         connectionTimeout = null;
     }
-    // Don't process if we're already in menu mode (user initiated leave)
-    if (currentMode === 'menu') {
+    if (currentMode === 'menu')
         return;
-    }
     cleanup();
     currentMode = 'menu';
     UIManager.setMode('menu');
-    // Only show message for unexpected disconnections
-    if (code !== 1000) {
-        UIManager.showNotification('Connection lost. Returned to main menu.', 4000);
-    }
+    if (code !== 1000)
+        UIManager.showNotification('Connection lost.', 4000);
     UIManager.render();
 }
 function syncToHostPlayback(state) {
@@ -279,50 +260,32 @@ function syncToHostPlayback(state) {
         try {
             UIManager.setPlaybackState(state);
             if (state.isPlaying) {
-                yield spotifyApi.play({
-                    uris: [state.trackUri],
-                    position_ms: state.positionMs
-                });
+                yield spotifyApi.play({ uris: [state.trackUri], position_ms: state.positionMs });
             }
             else {
                 yield spotifyApi.pause();
             }
         }
         catch (error) {
-            // Handle token refresh if needed
-            if (error instanceof Error && error.message.includes('401')) {
+            if (error.message.includes('401')) {
                 try {
                     const data = yield spotifyApi.refreshAccessToken();
                     spotifyApi.setAccessToken(data.body['access_token']);
-                    // Retry the sync after token refresh
-                    if (state.isPlaying) {
-                        yield spotifyApi.play({
-                            uris: [state.trackUri],
-                            position_ms: state.positionMs
-                        });
-                    }
-                    else {
-                        yield spotifyApi.pause();
-                    }
+                    yield syncToHostPlayback(state); // Retry
                 }
-                catch (refreshError) {
-                    // Silently handle if refresh fails
-                }
+                catch (refreshError) { /* Silent fail */ }
             }
         }
     });
 }
 function leaveRoom() {
-    // Immediately clean up and return to menu
     cleanup();
     currentMode = 'menu';
     UIManager.setMode('menu');
     UIManager.showNotification('Left room.', 2000);
     UIManager.render();
-    // Close WebSocket after UI update for faster response
-    if (ws) {
+    if (ws)
         ws.close(1000, 'User left room');
-    }
 }
 function cleanup() {
     if (ws) {
@@ -340,32 +303,31 @@ function cleanup() {
     isHost = false;
     isConnecting = false;
 }
-// Improved room ID prompting with better state management
 function promptForRoomId() {
     return new Promise((resolve) => {
-        // Set prompt mode to prevent keypress interference
         currentMode = 'prompt';
         UIManager.setMode('prompt');
-        // Temporarily disable raw mode for readline
+        // --- THE FIX IS HERE ---
+        // 1. Temporarily remove the global keypress listener.
+        process.stdin.removeListener('keypress', keypressHandler);
         if (process.stdin.isTTY) {
             process.stdin.setRawMode(false);
         }
-        // Clear the screen and show clean prompt
-        process.stdout.write('\x1B[2J\x1B[0f'); // Clear screen and move cursor to top
+        process.stdout.write('\x1B[2J\x1B[0f');
         console.log(chalk_1.default.bold.magenta('🎵 ListenAlong') + chalk_1.default.gray(' - Join Room'));
         console.log('');
-        // Create a new readline interface to avoid input contamination
         const promptRl = readline.createInterface({
             input: process.stdin,
             output: process.stdout
         });
-        promptRl.question(chalk_1.default.cyanBright('Enter Room ID to join (or press Enter to cancel): '), (input) => {
+        promptRl.question(chalk_1.default.cyanBright('Enter Room ID (or Enter to cancel): '), (input) => {
             promptRl.close();
-            // Restore raw mode
             if (process.stdin.isTTY) {
                 process.stdin.setRawMode(true);
             }
-            // Return to menu mode
+            // --- THE FIX IS HERE ---
+            // 2. Re-attach the global keypress listener so the menu works again.
+            process.stdin.on('keypress', keypressHandler);
             currentMode = 'menu';
             UIManager.setMode('menu');
             const roomId = input ? input.trim().toUpperCase() : null;
@@ -377,23 +339,17 @@ function promptForRoomId() {
     });
 }
 const startHostPolling = () => {
-    if (hostPollingInterval) {
+    if (hostPollingInterval)
         clearInterval(hostPollingInterval);
-    }
     let lastStateHash = '';
     let consecutiveErrors = 0;
-    let pollCount = 0;
     hostPollingInterval = setInterval(() => __awaiter(void 0, void 0, void 0, function* () {
-        // Stop polling if no longer host, not connected, or not in room mode
-        if (!isHost || !ws || ws.readyState !== ws_1.default.OPEN || currentMode !== 'in-room') {
-            if (hostPollingInterval) {
+        if (!isHost || !ws || ws.readyState !== ws_1.default.OPEN) {
+            if (hostPollingInterval)
                 clearInterval(hostPollingInterval);
-                hostPollingInterval = null;
-            }
             return;
         }
         try {
-            pollCount++;
             const state = yield spotifyApi.getMyCurrentPlaybackState();
             let currentState = null;
             if (state.body && state.body.item && 'artists' in state.body.item) {
@@ -407,83 +363,51 @@ const startHostPolling = () => {
                     timestamp: Date.now(),
                 };
             }
-            else {
-                // Handle paused/stopped state - keep the last known track info
-                const lastState = UIManager.getPlaybackState();
-                if (lastState) {
-                    currentState = Object.assign(Object.assign({}, lastState), { isPlaying: false, timestamp: Date.now() });
-                }
+            else if (UIManager.getPlaybackState()) {
+                currentState = Object.assign(Object.assign({}, UIManager.getPlaybackState()), { isPlaying: false });
             }
-            // Always update UI state, even if hash is the same (for progress bar)
-            if (currentState) {
+            if (currentState)
                 UIManager.setPlaybackState(currentState);
-            }
-            // Only send to server if state significantly changed (every 5 seconds or track/play state change)
-            const stateHash = currentState ?
-                `${currentState.trackUri}-${currentState.isPlaying}-${Math.floor(currentState.positionMs / 5000)}` :
-                'null';
+            const stateHash = currentState ? `${currentState.trackUri}-${currentState.isPlaying}-${Math.floor(currentState.positionMs / 5000)}` : 'null';
             if (stateHash !== lastStateHash) {
                 lastStateHash = stateHash;
-                // Send state to server if WebSocket is still open
                 if (ws && ws.readyState === ws_1.default.OPEN && currentState) {
-                    try {
-                        const message = {
-                            type: 'playback-state-update',
-                            payload: Object.assign(Object.assign({}, currentState), { accessToken: spotifyApi.getAccessToken() })
-                        };
-                        ws.send(JSON.stringify(message));
-                    }
-                    catch (sendError) {
-                        // WebSocket might be closed, ignore
-                    }
+                    ws.send(JSON.stringify({ type: 'playback-state-update', payload: Object.assign(Object.assign({}, currentState), { accessToken: spotifyApi.getAccessToken() }) }));
                 }
             }
-            // Render every time for smooth progress bar updates
-            if (currentMode === 'in-room') {
+            if (currentMode === 'in-room')
                 UIManager.render();
-            }
-            consecutiveErrors = 0; // Reset error counter on success
+            consecutiveErrors = 0;
         }
         catch (error) {
             consecutiveErrors++;
-            // Only handle auth errors, ignore other temporary errors
-            if (error instanceof Error && error.message.includes('401')) {
+            if (error.message.includes('401')) {
                 try {
                     const data = yield spotifyApi.refreshAccessToken();
-                    const newToken = data.body['access_token'];
-                    if (newToken) {
-                        spotifyApi.setAccessToken(newToken);
+                    if (data.body['access_token']) {
+                        spotifyApi.setAccessToken(data.body['access_token']);
                         consecutiveErrors = 0;
-                    }
-                    else {
-                        consecutiveErrors++;
                     }
                 }
                 catch (refreshError) {
-                    consecutiveErrors++;
                     if (consecutiveErrors > 3) {
-                        UIManager.showNotification('Authentication expired. Please restart.', 5000);
+                        UIManager.showNotification('Auth expired. Please restart.', 5000);
                         leaveRoom();
                     }
                 }
             }
-            // If too many consecutive errors, something is wrong
-            if (consecutiveErrors > 10) {
+            else if (consecutiveErrors > 10) {
                 UIManager.showNotification('Connection issues. Please restart.', 5000);
                 leaveRoom();
             }
         }
-    }), 2000); // 2 second intervals for stability
+    }), 2000);
 };
 function main() {
     return __awaiter(this, void 0, void 0, function* () {
         try {
-            // We no longer need the canary, but we'll leave it for now
-            console.log('--- EXECUTING SPOTALONG VERSION 1.0.4 ---');
-            // getAuthenticatedApi already prints the welcome message
+            console.log(`--- EXECUTING SPOTALONG VERSION ${version} ---`);
             spotifyApi = yield (0, tokenManager_1.getAuthenticatedApi)();
-            // This call was redundant, getAuthenticatedApi already confirms the user.
-            // We can get the user info directly from the already-authenticated object.
             const me = yield spotifyApi.getMe();
             UIManager.setMe({ id: me.body.id, username: me.body.display_name || 'User' });
             readline.emitKeypressEvents(process.stdin);
@@ -496,27 +420,30 @@ function main() {
                 console.log(`\n\n${chalk_1.default.bold.magenta('Happy Listening!')}\n`);
                 process.stdout.write('\x1B[?25h');
             });
-            const gracefulShutdown = () => {
-                cleanup();
-                process.exit();
-            };
+            const gracefulShutdown = () => { cleanup(); process.exit(); };
             process.on('SIGINT', gracefulShutdown);
             process.on('SIGTERM', gracefulShutdown);
             UIManager.render();
         }
         catch (error) {
-            // --- THIS IS THE NEW, ROBUST CATCH BLOCK ---
+            // Final, Production-Ready Catch Block
             console.error(chalk_1.default.red('\n🛑 Application failed to start:'));
-            // This will now handle ANY type of error object
-            if (error instanceof Error) {
+            if (error.statusCode === 403) {
+                console.error(chalk_1.default.yellow('Authentication succeeded, but Spotify blocked access (403 Forbidden).'));
+                console.error(chalk_1.default.cyan('This usually means the app is in "Development Mode" and your Spotify account has not been added to the allowed users list.'));
+                console.error(chalk_1.default.cyan('Please contact the developer and ask them to add your Spotify email to "Users and Access" in their Spotify Developer Dashboard.'));
+            }
+            else if (error.name === 'WebApiError' && error.body && error.body.error) {
+                const spotifyError = error.body.error;
+                const statusCode = error.statusCode || 'N/A';
+                const errorMessage = spotifyError.message || 'An unknown Spotify API error occurred.';
+                console.error(chalk_1.default.yellow(`Spotify API Error (Status: ${statusCode}): ${errorMessage}`));
+            }
+            else if (error instanceof Error) {
                 console.error(chalk_1.default.yellow(error.message));
-                if (error.stack) {
-                    console.error(chalk_1.default.gray(error.stack));
-                }
             }
             else {
-                // If it's not a standard Error object, stringify it
-                console.error(chalk_1.default.yellow(JSON.stringify(error, null, 2)));
+                console.error(chalk_1.default.yellow('An unexpected error occurred:'), error);
             }
             process.exit(1);
         }

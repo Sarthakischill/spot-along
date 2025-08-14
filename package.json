@@ -1,6 +1,6 @@
 {
   "name": "spotalong",
-  "version": "1.0.4",
+  "version": "1.1.3",
   "description": "Real-time Spotify listening parties, right in your terminal.",
   "main": "dist/client.js",
   "bin": {
@@ -37,7 +37,6 @@
     "chalk-animation": "^1.6.0",
     "dotenv": "^16.4.5",
     "env-paths": "^3.0.0",
-    "express": "^4.19.2",
     "fs-extra": "^11.2.0",
     "log-update": "^4.0.0",
     "open": "^8.4.2",

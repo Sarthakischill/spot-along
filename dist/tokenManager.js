@@ -22,11 +22,9 @@ const spotify_web_api_node_1 = __importDefault(require("spotify-web-api-node"));
 const open_1 = __importDefault(require("open"));
 const chalk_1 = __importDefault(require("chalk"));
 const crypto_1 = require("crypto");
-// The PUBLIC URL of your deployed authentication service.
 const AUTH_SERVICE_URL = 'https://spot-along-auth.sarthakshitole.workers.dev';
 const paths = (0, env_paths_1.default)('ListenAlong', { suffix: '' });
 const configPath = path_1.default.join(paths.config, 'config.json');
-// Save tokens to the user's config directory
 function saveTokens(data) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
@@ -34,11 +32,10 @@ function saveTokens(data) {
             yield fs_extra_1.default.writeJson(configPath, data, { spaces: 2 });
         }
         catch (error) {
-            // Silently handle save errors, as the app can continue without saving
+            // Silent
         }
     });
 }
-// Load tokens from the user's config directory
 function loadTokens() {
     return __awaiter(this, void 0, void 0, function* () {
         try {
@@ -51,47 +48,36 @@ function loadTokens() {
             return null;
         }
         catch (error) {
-            // If config file is corrupted, delete it and force re-auth
             yield resetConfig();
             return null;
         }
     });
 }
-// Get an authenticated Spotify API instance
 function getAuthenticatedApi() {
     return __awaiter(this, void 0, void 0, function* () {
-        // The API object no longer needs credentials. This is correct.
         const spotifyApi = new spotify_web_api_node_1.default();
         const savedTokens = yield loadTokens();
         if (savedTokens) {
             try {
                 console.log(chalk_1.default.gray('🔄 Verifying saved session...'));
-                // THIS IS THE NEW LOGIC: Ask OUR server to refresh the token.
                 const response = yield fetch(`${AUTH_SERVICE_URL}/refresh`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ refresh_token: savedTokens.refreshToken })
                 });
                 if (!response.ok) {
-                    // If our server says the refresh failed, the token is truly invalid.
-                    throw new Error('Could not refresh session.');
+                    throw new Error('Could not refresh session from server.');
                 }
                 const newTokens = yield response.json();
-                const newAccessToken = newTokens.access_token;
-                // Spotify might issue a new refresh token, so we save that too if it exists.
-                const newRefreshToken = newTokens.refresh_token || savedTokens.refreshToken;
-                spotifyApi.setAccessToken(newAccessToken);
-                spotifyApi.setRefreshToken(newRefreshToken);
-                // Now, confirm the refreshed token works
+                spotifyApi.setAccessToken(newTokens.access_token);
+                spotifyApi.setRefreshToken(newTokens.refresh_token || savedTokens.refreshToken);
                 const { body: me } = yield spotifyApi.getMe();
                 yield saveTokens({
-                    accessToken: newAccessToken,
-                    refreshToken: newRefreshToken,
+                    accessToken: newTokens.access_token,
+                    refreshToken: newTokens.refresh_token || savedTokens.refreshToken,
                     expiresAt: Date.now() + (newTokens.expires_in * 1000),
                 });
                 console.log(chalk_1.default.green(`✅ Welcome back, ${me.display_name || me.id}!`));
-                // The premium check is now implicitly handled by the app's core functions.
-                // If a user tries to host without premium capabilities, the spotifyApi calls will fail at that point.
                 return spotifyApi;
             }
             catch (error) {
@@ -99,35 +85,29 @@ function getAuthenticatedApi() {
                 yield resetConfig();
             }
         }
-        // This block for fresh authentication remains the same and is correct.
         console.log(chalk_1.default.cyan('🔐 First time setup - Spotify authentication required.'));
         try {
             const tokenData = yield performAutomatedAuthentication();
             spotifyApi.setAccessToken(tokenData.accessToken);
             spotifyApi.setRefreshToken(tokenData.refreshToken);
-            yield saveTokens(tokenData); // Save tokens first
-            // Now get the user info to welcome them
+            yield saveTokens(tokenData);
             const { body: me } = yield spotifyApi.getMe();
             console.log(chalk_1.default.green(`✅ Successfully authenticated as ${me.display_name || me.id}!`));
-            // The premium check is now implicitly handled by the app's core functions.
-            // If a user tries to host without premium capabilities, the spotifyApi calls will fail at that point.
             return spotifyApi;
         }
         catch (authError) {
             yield resetConfig();
-            const errorMessage = authError instanceof Error ? authError.message : 'An unknown authentication error occurred.';
-            throw new Error(`Authentication failed: ${errorMessage}`);
+            throw authError; // Just throw the original error
         }
     });
 }
-// Handles the browser-based auth flow
 function performAutomatedAuthentication() {
     return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
         const sessionId = (0, crypto_1.randomUUID)();
         const loginUrl = `${AUTH_SERVICE_URL}/login?sessionId=${sessionId}`;
         const checkUrl = `${AUTH_SERVICE_URL}/check-token?sessionId=${sessionId}`;
         const pollInterval = 2500;
-        const timeout = 120000; // 2 minutes
+        const timeout = 120000;
         let isFinalized = false;
         const cleanup = (intervalId, timeoutId) => {
             isFinalized = true;
@@ -138,14 +118,14 @@ function performAutomatedAuthentication() {
             if (isFinalized)
                 return;
             cleanup(intervalId, timeoutId);
-            reject(new Error('Authentication timed out after 2 minutes. Please try again.'));
+            reject(new Error('Authentication timed out. Please try again.'));
         }, timeout);
         const intervalId = setInterval(() => __awaiter(this, void 0, void 0, function* () {
             if (isFinalized)
                 return;
             try {
                 const response = yield fetch(checkUrl);
-                if (response.ok) { // Status 200-299
+                if (response.ok) {
                     const tokens = yield response.json();
                     if (!tokens.access_token || !tokens.refresh_token) {
                         throw new Error('Invalid token response from auth service.');
@@ -157,26 +137,18 @@ function performAutomatedAuthentication() {
                         expiresAt: Date.now() + (tokens.expires_in || 3600) * 1000,
                     });
                 }
-                else if (response.status === 404) {
-                    // This is expected. Waiting for user to log in.
-                }
-                else {
+                else if (response.status !== 404) {
                     const errorText = yield response.text().catch(() => 'Server returned an unreadable error.');
                     throw new Error(`Auth service failed with status ${response.status}: ${errorText}`);
                 }
             }
             catch (error) {
-                let detail = 'Unknown error';
-                if (error instanceof Error) {
-                    // Capture the error's name (e.g., TypeError) and message
-                    detail = `${error.name}: ${error.message}`;
-                }
-                const friendlyError = new Error(`Polling for authentication failed. This is likely a local network issue (e.g., firewall, proxy, or VPN blocking the request). Please check your settings and try again. \n  Underlying error: ${detail}`);
+                const detail = (error instanceof Error) ? `${error.name}: ${error.message}` : 'Unknown error';
+                const friendlyError = new Error(`Polling for auth token failed. This could be a local network issue (firewall, VPN) or a server problem.\n  Underlying error: ${detail}`);
                 cleanup(intervalId, timeoutId);
                 reject(friendlyError);
             }
         }), pollInterval);
-        // This part for opening the browser remains unchanged.
         try {
             console.log(chalk_1.default.cyan('\n🌐 Opening browser for Spotify authentication...'));
             console.log(chalk_1.default.gray("If the browser doesn't open, please visit this URL:"));
@@ -185,29 +157,22 @@ function performAutomatedAuthentication() {
             yield (0, open_1.default)(loginUrl);
         }
         catch (error) {
-            console.log(chalk_1.default.yellow('\n⚠️  Could not open browser automatically.'));
-            console.log(chalk_1.default.cyan('Please manually open this URL in your browser:'));
+            console.log(chalk_1.default.yellow('\n⚠️  Could not open browser automatically. Please manually open this URL:'));
             console.log(chalk_1.default.blue(loginUrl));
-            console.log(chalk_1.default.gray('\nWaiting for you to complete authentication...\n'));
         }
     }));
 }
-// Gets path to config file (for help screen)
 function getConfigPath() {
-    const paths = (0, env_paths_1.default)('ListenAlong', { suffix: '' });
-    return path_1.default.join(paths.config, 'config.json');
+    return configPath;
 }
-// Deletes the saved token file
 function resetConfig() {
     return __awaiter(this, void 0, void 0, function* () {
-        const configFilePath = getConfigPath();
         try {
-            if (yield fs_extra_1.default.pathExists(configFilePath)) {
-                yield fs_extra_1.default.remove(configFilePath);
+            if (yield fs_extra_1.default.pathExists(configPath)) {
+                yield fs_extra_1.default.remove(configPath);
             }
         }
         catch (error) {
-            // This should not fail, but if it does, there's not much we can do
             console.error('Failed to reset configuration:', error);
         }
     });

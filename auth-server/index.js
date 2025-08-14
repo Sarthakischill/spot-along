@@ -58,14 +58,18 @@ export default {
                 await env.TOKEN_STORE.put(sessionId, JSON.stringify(tokens), { expirationTtl: 120 });
 
                 // Show a simple success page
-                const html = `<!DOCTYPE html><html lang="en"><head><title>Success!</title><style>body{font-family:sans-serif;background:#121212;color:white;display:flex;justify-content:center;align-items:center;height:100vh}div{text-align:center}h1{color:#1DB954}</style></head><body><div><h1>✅ Success!</h1><p>You have been authenticated. Please return to your terminal.</p><p style="color:#888">(This window will close automatically in a moment)</p></div><script>setTimeout(()=>window.close(),2000)</script></body></html>`;
-                return new Response(html, { headers: { 'Content-Type': 'text/html' } });
+                const html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Success!</title><style>body{font-family:sans-serif;background:#121212;color:white;display:flex;justify-content:center;align-items:center;height:100vh}div{text-align:center}h1{color:#1DB954}</style></head><body><div><h1>✅ Success!</h1><p>You have been authenticated. Please return to your terminal.</p><p style="color:#888">(This window will close automatically in a moment)</p></div><script>setTimeout(()=>window.close(),2000)</script></body></html>`;
+
+                // --- THIS IS THE FIX ---
+                return new Response(html, {
+                    headers: { 'Content-Type': 'text/html;charset=utf-8' }
+                });
 
             } catch (error) {
                 return new Response(`Authentication failed: ${error.message}`, { status: 500 });
             }
         }
-        
+
         // New endpoint for the CLI to poll
         if (path === '/check-token') {
             const sessionId = url.searchParams.get('sessionId');
@@ -82,7 +86,7 @@ export default {
 
             // Tokens found! Delete them so they can't be retrieved again.
             await env.TOKEN_STORE.delete(sessionId);
-            
+
             // Send the tokens to the CLI
             return new Response(tokenString, { headers: { 'Content-Type': 'application/json' } });
         }
@@ -104,7 +108,7 @@ export default {
 
                 const tokenUrl = "https://accounts.spotify.com/api/token";
                 const credentials = `${env.SPOTIFY_CLIENT_ID}:${env.SPOTIFY_CLIENT_SECRET}`;
-                
+
                 const refreshBody = new URLSearchParams({
                     grant_type: 'refresh_token',
                     refresh_token: refreshToken
@@ -123,9 +127,9 @@ export default {
                     const errorData = await response.text();
                     throw new Error(`Failed to refresh token from Spotify: ${errorData}`);
                 }
-                
+
                 const newTokens = await response.json();
-                
+
                 // Return the new token data (especially the new access_token) to the client
                 return new Response(JSON.stringify(newTokens), {
                     headers: { 'Content-Type': 'application/json' }
