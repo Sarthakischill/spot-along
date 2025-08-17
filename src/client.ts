@@ -211,7 +211,7 @@ function promptForRoomId(): Promise<string | null> {
         }
 
         process.stdout.write('\x1B[2J\x1B[0f');
-        console.log(chalk.bold.magenta('🎵 ListenAlong') + chalk.gray(' - Join Room'));
+        console.log(chalk.bold.magenta('🎵 SpotAlong') + chalk.gray(' - Join Room'));
         console.log('');
 
         const promptRl = readline.createInterface({

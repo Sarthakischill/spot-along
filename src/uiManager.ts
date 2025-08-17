@@ -21,7 +21,7 @@ const uiState = {
     lastRender: 0,
 };
 
-const titleAnimation = chalkAnimation.karaoke('ListenAlong', 2);
+const titleAnimation = chalkAnimation.karaoke('SpotAlong', 2);
 
 // A helper for creating hyperlinks in modern terminals
 const link = (text: string, url: string) => `\u001b]8;;${url}\u0007${text}\u001b]8;;\u0007`;
@@ -57,7 +57,7 @@ export function render() {
   else if (uiState.mode === 'in-room') mainContent = drawInRoomUI();
   else if (uiState.mode === 'help') mainContent = drawHelpScreen();
 
-  const header = `${chalk.bold.magenta('🎵 ListenAlong')} - Welcome, ${chalk.cyan(uiState.me?.username || 'User')}\n`;
+  const header = `${chalk.bold.magenta('🎵 SpotAlong')} - Welcome, ${chalk.cyan(uiState.me?.username || 'User')}\n`;
   const footer = `\n${chalk.gray('──────────────────────────────────')}\nMade with ${chalk.red('♥')} by ${chalk.cyan('Sarthak')} (x.com/Sarthakhuh)`;
   let notificationLine = '';
   if (uiState.notification) {

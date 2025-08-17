@@ -1,4 +1,4 @@
-# ListenAlong 🎵
+# SpotAlong 🎵
 
 Real-time Spotify listening parties, right in your terminal. Sync your Spotify playback with friends and enjoy music together!
 
@@ -21,13 +21,13 @@ Real-time Spotify listening parties, right in your terminal. Sync your Spotify p
 ### Installation
 
 ```bash
-npm install -g listenalong
+npm install -g spotalong
 ```
 
 ### First-Time Setup
 
 1. **Deploy the Backend Services** (see [Deployment Guide](#deployment-guide) below)
-2. **Run the app**: `listenalong`
+2. **Run the app**: `spotalong`
 3. **Authenticate with Spotify** when prompted
 4. **Create or join a room** and start listening!
 
