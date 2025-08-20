@@ -1,6 +1,6 @@
 # SpotAlong 🎵
 
-Real-time Spotify listening parties, right in your terminal. Sync your Spotify playback with friends and enjoy music together!
+Real-time Spotify listening parties, right in your terminal. Sync your Spotify playback with friends and enjoy music together! [Inivite only for now, as spotify does not allow individuals to get out of developer mode]
 
 ## ✨ Features
 
